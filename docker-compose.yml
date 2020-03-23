@@ -1,0 +1,51 @@
+version: '3.7'
+services:
+  watcher:
+    build: .
+    restart: always
+    entrypoint: ["/transcode", "watcher"]
+    depends_on:
+      - rabbitmq
+      - redis
+
+  splitter:
+    build: .
+    restart: always
+    entrypoint: ["/transcode", "splitter"]
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./example:/data
+
+  encoder:
+    build: .
+    restart: always
+    entrypoint: ["/transcode", "encoder"]
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./example:/data
+    deploy:
+      mode: replicated
+      replicas: 3
+
+  merger:
+    build: .
+    restart: always
+    entrypoint: ["/transcode", "merger"]
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./example:/data
+
+  rabbitmq:
+    image: "rabbitmq:3-management"
+    hostname: rabbitmq
+    ports:
+      - 15672:15672
+      - 5672:5672
+
+  redis:
+    image: redis:latest
+    ports:
+      - 6379:6379
