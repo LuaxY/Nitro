@@ -7,6 +7,13 @@ type SplitterRequest struct {
 	Params    []Params `yaml:"params"`
 }
 
+type SplitterResponse struct {
+	UID         string   `yaml:"uid"`
+	TotalChunks int      `yaml:"totalChunks"`
+	Chunks      []string `yaml:"chunks"`
+	Params      []Params `yaml:"params"`
+}
+
 type EncoderRequest struct {
 	UID    string   `yaml:"uid"`
 	Chunk  string   `yaml:"chunk"`
@@ -22,6 +29,21 @@ type EncoderResponse struct {
 type MergerRequest struct {
 	UID    string                 `yaml:"uid"`
 	Chunks map[int]map[int]string `yaml:"chunks"`
+}
+
+type MergerResponse struct {
+	UID       string `yaml:"uid"`
+	Qualities []int  `yaml:"qualities"`
+}
+
+type PackagerRequest struct {
+	UID       string `yaml:"uid"`
+	Qualities []int  `yaml:"qualities"`
+}
+
+type PackagerResponse struct {
+	UID       string   `yaml:"uid"`
+	Manifests []string `yaml:"manifests"`
 }
 
 type Params struct {

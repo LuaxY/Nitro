@@ -13,12 +13,12 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v2"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
 	"trancode/internal/queue"
 	"trancode/internal/storage"
+	"trancode/internal/util"
 )
 
 func init() {
@@ -46,7 +46,8 @@ func Run() {
 	}
 
 	for {
-		data, ok, err := channel.Consume("merger.request")
+		var req queue.MergerRequest
+		ok, err := channel.Consume("merger.request", &req)
 
 		if err != nil {
 			log.Fatal(err)
@@ -55,14 +56,6 @@ func Run() {
 		if !ok {
 			time.Sleep(5 * time.Second)
 			continue
-		}
-
-		var req queue.MergerRequest
-
-		err = yaml.Unmarshal(data, &req)
-
-		if err != nil {
-			log.Fatal(err)
 		}
 
 		list := make(map[int]map[int]string)
@@ -76,18 +69,28 @@ func Run() {
 			}
 		}
 
+		var qualities []int
+
 		for quality, chunks := range list {
-			final, err := merge(req.UID, bucket, quality, chunks)
+			_, err := merge(req.UID, bucket, quality, chunks)
 
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			log.Println("FINAL", final.Path)
+			qualities = append(qualities, quality)
+		}
+
+		if err = channel.Publish("merger.response", queue.MergerResponse{
+			UID:       req.UID,
+			Qualities: qualities,
+		}); err != nil {
+			log.Fatal(err)
 		}
 	}
 }
 
+// TODO result needed ?
 type result struct {
 	Path string
 }
@@ -107,8 +110,6 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 
 	defer f.Close()
 
-	// TODO sort chunks by key (id)
-
 	var keys []int
 
 	for k := range chunks {
@@ -119,16 +120,10 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 
 	for _, k := range keys {
 		chunk := chunks[k]
-		chunkFile, err := bucket.Get(chunk)
-
-		if err != nil {
-			return nil, errors.Wrapf(err, "unable to get chunk file %s from bucket", chunk)
-		}
-
 		chunkFilePath := workDir + "/" + path.Base(chunk)
 
-		if err = ioutil.WriteFile(chunkFilePath, chunkFile, os.ModePerm); err != nil {
-			return nil, errors.Wrap(err, "unable to write chunk file")
+		if err = util.Download(bucket, chunk, chunkFilePath); err != nil {
+			return nil, errors.Wrap(err, "unable to get chunk file")
 		}
 
 		if _, err = f.WriteString(fmt.Sprintf("file '%s'\n", chunkFilePath)); err != nil {
@@ -140,36 +135,30 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 		return nil, errors.Wrap(err, "unable to close list file")
 	}
 
-	result := &result{}
+	res := &result{}
 	exec := executor.NewExecutor(&bytes.Buffer{})
 
 	// Video
 
-	cmd := &executor.Cmd{Binary: "ffmpeg"}
-	cmd.Add("-f", "concat")
-	cmd.Add("-safe", "0")
-	cmd.Add("-i", workDir+"/list.txt")
-	cmd.Add("-c", "copy")
-	cmd.Add(workDir + "/final.mp4")
-	err = exec.Run(cmd)
+	ffmpeg := &executor.Cmd{Binary: "ffmpeg"}
+	ffmpeg.Add("-f", "concat")
+	ffmpeg.Add("-safe", "0")
+	ffmpeg.Add("-i", workDir+"/list.txt")
+	ffmpeg.Add("-c", "copy")
+	ffmpeg.Add(workDir + "/merged.mp4")
+	err = exec.Run(ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to merge chunk files with ffmpeg")
 	}
 
-	data, err := ioutil.ReadFile(workDir + "/final.mp4")
-
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to read merged file")
-	}
-
 	finalPath := fmt.Sprintf("%s/%d.mp4", uid, quality)
 
-	if err = bucket.Store(finalPath, data); err != nil {
+	if err = util.Upload(bucket, finalPath, workDir+"/merged.mp4"); err != nil {
 		return nil, errors.Wrap(err, "unable to store merged file")
 	}
 
-	result.Path = finalPath
+	res.Path = finalPath
 
-	return result, nil
+	return res, nil
 }

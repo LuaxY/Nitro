@@ -7,6 +7,8 @@ services:
     depends_on:
       - rabbitmq
       - redis
+    volumes:
+      - ./example:/data
 
   splitter:
     build: .
@@ -25,14 +27,20 @@ services:
       - rabbitmq
     volumes:
       - ./example:/data
-    deploy:
-      mode: replicated
-      replicas: 3
 
   merger:
     build: .
     restart: always
     entrypoint: ["/transcode", "merger"]
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./example:/data
+
+  packager:
+    build: .
+    restart: always
+    entrypoint: ["/transcode", "packager"]
     depends_on:
       - rabbitmq
     volumes:

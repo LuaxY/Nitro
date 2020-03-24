@@ -2,6 +2,7 @@ package queue
 
 import (
 	"github.com/streadway/amqp"
+	"gopkg.in/yaml.v2"
 )
 
 type rabbitmq struct {
@@ -26,27 +27,39 @@ func NewRabbitMQ(url string) (Channel, error) {
 }
 
 func (r *rabbitmq) CreateQueue(queue string) error {
-	_, err := r.ch.QueueDeclare(queue, false, false, false, false, nil)
+	_, err := r.ch.QueueDeclare(queue, true, false, false, false, nil)
 	return err
 }
 
-func (r *rabbitmq) Consume(queue string) (data []byte, ok bool, err error) {
+func (r *rabbitmq) Consume(queue string, data interface{}) (k bool, err error) {
 	msg, ok, err := r.ch.Get(queue, true)
 
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 
 	if !ok {
-		return nil, false, nil
+		return false, nil
 	}
 
-	return msg.Body, true, nil
+	err = yaml.Unmarshal(msg.Body, data)
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
-func (r *rabbitmq) Publish(queue string, data []byte) (err error) {
+func (r *rabbitmq) Publish(queue string, data interface{}) (err error) {
+	body, err := yaml.Marshal(data)
+
+	if err != nil {
+		return err
+	}
+
 	return r.ch.Publish("", queue, false, false, amqp.Publishing{
 		ContentType: "text/yaml",
-		Body:        data,
+		Body:        body,
 	})
 }
