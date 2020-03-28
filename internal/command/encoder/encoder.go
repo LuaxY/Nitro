@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
@@ -27,29 +31,59 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "encoder",
 	Run: func(cmd *cobra.Command, args []string) {
-		Run()
+		var err error
+		log.Info("starting encoder")
+
+		amqp := viper.GetString("amqp")
+		channel, err := queue.NewRabbitMQ(amqp)
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
+		}
+
+		log.Infof("connected to queue '%s'", amqp)
+
+		//bucketName := viper.GetString("storage")
+		//bucket, err := storage.NewLocal(context.Background(), bucketName)
+
+		bucketName := viper.GetString("aws-bucket")
+		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
+			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
+			Region:      aws.String(viper.GetString("aws-region")),
+			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
+		})
+
+		if err != nil {
+			log.Infof("connected to storage '%s'", bucketName)
+		}
+
+		log.Infof("connected to storage '%s'", bucketName)
+
+		e := encoder{
+			channel: channel,
+			bucket:  bucket,
+		}
+
+		e.Run()
 	},
 }
 
-func Run() {
-	bucket, err := storage.NewLocal(context.Background(), root.Cmd.Flag("storage").Value.String())
+type encoder struct {
+	channel queue.Channel
+	bucket  storage.Bucket
+}
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	channel, err := queue.NewRabbitMQ(root.Cmd.Flag("amqp").Value.String())
-
-	if err != nil {
-		log.Fatal(err)
-	}
+func (e *encoder) Run() {
+	log.Info("encoder started")
 
 	for {
 		var req queue.EncoderRequest
-		ok, err := channel.Consume("encoder.request", &req)
+		ok, err := e.channel.Consume("encoder.request", &req)
 
 		if err != nil {
-			log.Fatal(err)
+			log.WithError(err).Error("unable to consume encoder.request")
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		if !ok {
@@ -57,18 +91,8 @@ func Run() {
 			continue
 		}
 
-		encodedFile, err := encode(req.UID, bucket, req.Chunk, req.Params)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if err = channel.Publish("encoder.response", queue.EncoderResponse{
-			UID:       req.UID,
-			ID:        encodedFile.ID,
-			Qualities: encodedFile.Qualities,
-		}); err != nil {
-			log.Fatal(err)
+		if err = e.HandleEncoder(req); err != nil {
+			log.WithError(err).Error("error while handling encoder")
 		}
 	}
 }
@@ -78,9 +102,44 @@ type result struct {
 	Qualities map[int]string
 }
 
+func (e *encoder) HandleEncoder(req queue.EncoderRequest) error {
+	log.WithFields(log.Fields{
+		"app":   "encoder",
+		"uid":   req.UID,
+		"chunk": req.Chunk,
+	}).Info("receive encoder request")
+
+	encodedFile, err := encode(req.UID, e.bucket, req.Chunk, req.Params)
+
+	if err != nil {
+		return errors.Wrapf(err, "error while encoding '%s'", req.UID)
+	}
+
+	if err = e.channel.Publish("encoder.response", queue.EncoderResponse{
+		UID:       req.UID,
+		ID:        encodedFile.ID,
+		Qualities: encodedFile.Qualities,
+	}); err != nil {
+		return errors.Wrap(err, "unable to publish in encoder.response")
+	}
+
+	log.WithFields(log.Fields{
+		"app":       "encoder",
+		"uid":       req.UID,
+		"qualities": encodedFile.Qualities,
+	}).Info("send encoder response")
+
+	return nil
+}
+
 func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.Params) (*result, error) {
-	workDir := "/tmp/" + uid
-	_ = os.MkdirAll(workDir, os.ModePerm)
+	workDir, err := ioutil.TempDir(os.TempDir(), "encode")
+
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create temporary working directory")
+	}
+
+	defer os.RemoveAll(workDir)
 
 	var id int
 	fileName := path.Base(chunkFilePath)
@@ -148,7 +207,7 @@ func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.P
 		list[params.Height] = encodedFilePath
 	}
 
-	err := exec.Run(ffmpeg)
+	err = exec.Run(ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to encode chunk with ffmpeg")

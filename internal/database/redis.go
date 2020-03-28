@@ -1,6 +1,8 @@
 package database
 
 import (
+	"time"
+
 	"github.com/go-redis/redis/v7"
 )
 
@@ -22,6 +24,6 @@ func (r *redisDb) Get(key string) (data string, err error) {
 	return r.client.Get(key).Result()
 }
 
-func (r *redisDb) Set(key string, data string) (err error) {
-	return r.client.Set(key, data, 0).Err()
+func (r *redisDb) Set(key string, data string, expiration time.Duration) (err error) {
+	return r.client.Set(key, data, expiration).Err()
 }

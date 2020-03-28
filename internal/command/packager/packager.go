@@ -5,12 +5,15 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
@@ -26,29 +29,59 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "packager",
 	Run: func(cmd *cobra.Command, args []string) {
-		Run()
+		var err error
+		log.Info("starting packager")
+
+		amqp := viper.GetString("amqp")
+		channel, err := queue.NewRabbitMQ(amqp)
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
+		}
+
+		log.Infof("connected to queue '%s'", amqp)
+
+		//bucketName := viper.GetString("storage")
+		//bucket, err := storage.NewLocal(context.Background(), bucketName)
+
+		bucketName := viper.GetString("aws-bucket")
+		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
+			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
+			Region:      aws.String(viper.GetString("aws-region")),
+			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
+		})
+
+		if err != nil {
+			log.Infof("connected to storage '%s'", bucketName)
+		}
+
+		log.Infof("connected to storage '%s'", bucketName)
+
+		p := packager{
+			channel: channel,
+			bucket:  bucket,
+		}
+
+		p.Run()
 	},
 }
 
-func Run() {
-	bucket, err := storage.NewLocal(context.Background(), root.Cmd.Flag("storage").Value.String())
+type packager struct {
+	channel queue.Channel
+	bucket  storage.Bucket
+}
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	channel, err := queue.NewRabbitMQ(root.Cmd.Flag("amqp").Value.String())
-
-	if err != nil {
-		log.Fatal(err)
-	}
+func (p *packager) Run() {
+	log.Info("packager started")
 
 	for {
 		var req queue.PackagerRequest
-		ok, err := channel.Consume("packer.request", &req)
+		ok, err := p.channel.Consume("packager.request", &req)
 
 		if err != nil {
-			log.Fatal(err)
+			log.WithError(err).Error("unable to consume packager.request")
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		if !ok {
@@ -56,14 +89,37 @@ func Run() {
 			continue
 		}
 
-		_, err = pack(req.UID, bucket, req.Qualities)
-
-		if err = channel.Publish("packer.response", queue.PackagerResponse{
-			UID: req.UID,
-		}); err != nil {
-			log.Fatal(err)
+		if err = p.HandlePackager(req); err != nil {
+			log.WithError(err).Error("error while handling packager")
 		}
 	}
+}
+
+func (p *packager) HandlePackager(req queue.PackagerRequest) error {
+	log.WithFields(log.Fields{
+		"app":       "packager",
+		"uid":       req.UID,
+		"qualities": req.Qualities,
+	}).Info("receive merger request")
+
+	_, err := pack(req.UID, p.bucket, req.Qualities)
+
+	if err != nil {
+		return errors.Wrapf(err, "error while packing '%s'", req.UID)
+	}
+
+	if err = p.channel.Publish("packager.response", queue.PackagerResponse{
+		UID: req.UID,
+	}); err != nil {
+		return errors.Wrap(err, "unable to publish in packager.response")
+	}
+
+	log.WithFields(log.Fields{
+		"app": "packager",
+		"uid": req.UID,
+	}).Info("send packager response")
+
+	return nil
 }
 
 type result struct {
@@ -71,11 +127,13 @@ type result struct {
 }
 
 func pack(uid string, bucket storage.Bucket, qualities []int) (*result, error) {
-	workDir, err := ioutil.TempDir(os.TempDir(), "merge")
+	workDir, err := ioutil.TempDir(os.TempDir(), "pack")
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create temporary working directory")
 	}
+
+	defer os.RemoveAll(workDir)
 
 	if err = util.Download(bucket, uid+"/audio.m4a", workDir+"/audio.m4a"); err != nil {
 		return nil, errors.Wrap(err, "unable to get audio file")
@@ -111,8 +169,6 @@ func pack(uid string, bucket storage.Bucket, qualities []int) (*result, error) {
 	files[uid+"/manifest.mpd"] = workDir + "/out/manifest.mpd"
 
 	for key, file := range files {
-		//log.Printf("upload '%s' to '%s'", file, key)
-
 		if err = util.Upload(bucket, key, file); err != nil {
 			return nil, errors.Wrapf(err, "unable to upload %s file", file)
 		}

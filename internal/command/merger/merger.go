@@ -5,14 +5,17 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"path"
 	"sort"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
@@ -28,29 +31,59 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "merger",
 	Run: func(cmd *cobra.Command, args []string) {
-		Run()
+		var err error
+		log.Info("starting merger")
+
+		amqp := viper.GetString("amqp")
+		channel, err := queue.NewRabbitMQ(amqp)
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
+		}
+
+		log.Infof("connected to queue '%s'", amqp)
+
+		//bucketName := viper.GetString("storage")
+		//bucket, err := storage.NewLocal(context.Background(), bucketName)
+
+		bucketName := viper.GetString("aws-bucket")
+		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
+			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
+			Region:      aws.String(viper.GetString("aws-region")),
+			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
+		})
+
+		if err != nil {
+			log.Infof("connected to storage '%s'", bucketName)
+		}
+
+		log.Infof("connected to storage '%s'", bucketName)
+
+		m := merger{
+			channel: channel,
+			bucket:  bucket,
+		}
+
+		m.Run()
 	},
 }
 
-func Run() {
-	bucket, err := storage.NewLocal(context.Background(), root.Cmd.Flag("storage").Value.String())
+type merger struct {
+	channel queue.Channel
+	bucket  storage.Bucket
+}
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	channel, err := queue.NewRabbitMQ(root.Cmd.Flag("amqp").Value.String())
-
-	if err != nil {
-		log.Fatal(err)
-	}
+func (m *merger) Run() {
+	log.Info("merger started")
 
 	for {
 		var req queue.MergerRequest
-		ok, err := channel.Consume("merger.request", &req)
+		ok, err := m.channel.Consume("merger.request", &req)
 
 		if err != nil {
-			log.Fatal(err)
+			log.WithError(err).Error("unable to consume merger.request")
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		if !ok {
@@ -58,36 +91,55 @@ func Run() {
 			continue
 		}
 
-		list := make(map[int]map[int]string)
-
-		for id, qualities := range req.Chunks {
-			for quality, chunk := range qualities {
-				if list[quality] == nil {
-					list[quality] = make(map[int]string)
-				}
-				list[quality][id] = chunk
-			}
-		}
-
-		var qualities []int
-
-		for quality, chunks := range list {
-			_, err := merge(req.UID, bucket, quality, chunks)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			qualities = append(qualities, quality)
-		}
-
-		if err = channel.Publish("merger.response", queue.MergerResponse{
-			UID:       req.UID,
-			Qualities: qualities,
-		}); err != nil {
-			log.Fatal(err)
+		if err = m.HandleMerger(req); err != nil {
+			log.WithError(err).Error("error while handling merger")
 		}
 	}
+}
+
+func (m *merger) HandleMerger(req queue.MergerRequest) error {
+	log.WithFields(log.Fields{
+		"app": "merger",
+		"uid": req.UID,
+	}).Info("receive merger request")
+
+	list := make(map[int]map[int]string)
+
+	for id, qualities := range req.Chunks {
+		for quality, chunk := range qualities {
+			if list[quality] == nil {
+				list[quality] = make(map[int]string)
+			}
+			list[quality][id] = chunk
+		}
+	}
+
+	var qualities []int
+
+	for quality, chunks := range list {
+		_, err := merge(req.UID, m.bucket, quality, chunks)
+
+		if err != nil {
+			return errors.Wrapf(err, "error while merging '%s' %d", req.UID, quality)
+		}
+
+		qualities = append(qualities, quality)
+	}
+
+	if err := m.channel.Publish("merger.response", queue.MergerResponse{
+		UID:       req.UID,
+		Qualities: qualities,
+	}); err != nil {
+		return errors.Wrap(err, "unable to publish in merger.response")
+	}
+
+	log.WithFields(log.Fields{
+		"app":       "merger",
+		"uid":       req.UID,
+		"qualities": qualities,
+	}).Info("send merger response")
+
+	return nil
 }
 
 // TODO result needed ?
@@ -101,6 +153,8 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create temporary working directory")
 	}
+
+	defer os.RemoveAll(workDir)
 
 	f, err := os.Create(workDir + "/list.txt")
 

@@ -2,14 +2,15 @@ package util
 
 import (
 	"io/ioutil"
-	"log"
 	"os"
+
+	log "github.com/sirupsen/logrus"
 
 	"trancode/internal/storage"
 )
 
 func Download(bucket storage.Bucket, key string, path string) error {
-	log.Printf("download '%s' to '%s'", key, path)
+	log.Debugf("download '%s' to '%s'", key, path)
 
 	data, err := bucket.Get(key)
 
@@ -21,7 +22,7 @@ func Download(bucket storage.Bucket, key string, path string) error {
 }
 
 func Upload(bucket storage.Bucket, key string, path string) error {
-	log.Printf("upload '%s' to '%s'", path, key)
+	log.Debugf("upload '%s' to '%s'", path, key)
 
 	data, err := ioutil.ReadFile(path)
 

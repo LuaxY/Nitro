@@ -3,14 +3,18 @@ package splitter
 import (
 	"bytes"
 	"context"
-	"log"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
@@ -26,30 +30,59 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "splitter",
 	Run: func(cmd *cobra.Command, args []string) {
-		Run()
+		var err error
+		log.Info("starting splitter")
+
+		amqp := viper.GetString("amqp")
+		channel, err := queue.NewRabbitMQ(amqp)
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
+		}
+
+		log.Infof("connected to queue '%s'", amqp)
+
+		//bucketName := viper.GetString("storage")
+		//bucket, err := storage.NewLocal(context.Background(), bucketName)
+
+		bucketName := viper.GetString("aws-bucket")
+		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
+			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
+			Region:      aws.String(viper.GetString("aws-region")),
+			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
+		})
+
+		if err != nil {
+			log.Infof("connected to storage '%s'", bucketName)
+		}
+
+		log.Infof("connected to storage '%s'", bucketName)
+
+		s := splitter{
+			channel: channel,
+			bucket:  bucket,
+		}
+
+		s.Run()
 	},
 }
 
-func Run() {
-	// TODO S3
-	bucket, err := storage.NewLocal(context.Background(), root.Cmd.Flag("storage").Value.String())
+type splitter struct {
+	channel queue.Channel
+	bucket  storage.Bucket
+}
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	channel, err := queue.NewRabbitMQ(root.Cmd.Flag("amqp").Value.String())
-
-	if err != nil {
-		log.Fatal(err)
-	}
+func (s *splitter) Run() {
+	log.Info("splitter started")
 
 	for {
 		var req queue.SplitterRequest
-		ok, err := channel.Consume("splitter.request", &req)
+		ok, err := s.channel.Consume("splitter.request", &req)
 
 		if err != nil {
-			log.Fatal(err)
+			log.WithError(err).Error("unable to consume splitter.request")
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		if !ok {
@@ -57,21 +90,42 @@ func Run() {
 			continue
 		}
 
-		splittedFiles, err := split(req.UID, bucket, req.Input, req.ChunkTime)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if err = channel.Publish("splitter.response", queue.SplitterResponse{
-			UID:         req.UID,
-			TotalChunks: len(splittedFiles.Chunks),
-			Chunks:      splittedFiles.Chunks,
-			Params:      req.Params,
-		}); err != nil {
-			log.Fatal(err)
+		if err = s.HandleSplitter(req); err != nil {
+			log.WithError(err).Error("error while handling splitter")
 		}
 	}
+}
+
+func (s *splitter) HandleSplitter(req queue.SplitterRequest) error {
+	log.WithFields(log.Fields{
+		"app":        "splitter",
+		"uid":        req.UID,
+		"input":      req.Input,
+		"chunk_time": req.ChunkTime,
+	}).Info("receive splitter request")
+
+	splittedFiles, err := split(req.UID, s.bucket, req.Input, req.ChunkTime)
+
+	if err != nil {
+		return errors.Wrapf(err, "error while splitting '%s'", req.UID)
+	}
+
+	if err = s.channel.Publish("splitter.response", queue.SplitterResponse{
+		UID:         req.UID,
+		TotalChunks: len(splittedFiles.Chunks),
+		Chunks:      splittedFiles.Chunks,
+		Params:      req.Params,
+	}); err != nil {
+		return errors.Wrap(err, "unable to publish in splitter.response")
+	}
+
+	log.WithFields(log.Fields{
+		"app":          "splitter",
+		"uid":          req.UID,
+		"total_chunks": len(splittedFiles.Chunks),
+	}).Info("send splitter response")
+
+	return nil
 }
 
 type result struct {
@@ -80,8 +134,13 @@ type result struct {
 }
 
 func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime int) (*result, error) {
-	workDir := "/tmp/" + uid
-	_ = os.MkdirAll(workDir, os.ModePerm)
+	workDir, err := ioutil.TempDir(os.TempDir(), "split")
+
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create temporary working directory")
+	}
+
+	defer os.RemoveAll(workDir)
 
 	if err := util.Download(bucket, masterFilePath, workDir+"/master.mp4"); err != nil {
 		return nil, errors.Wrap(err, "unable get master file")
@@ -101,7 +160,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 	ffmpeg.Add("-f", "segment")
 	ffmpeg.Add("-segment_time", strconv.Itoa(chunkTime))
 	ffmpeg.Add(workDir + "/chunks/%03d.mp4")
-	err := exec.Run(ffmpeg)
+	err = exec.Run(ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to split master file with ffmpeg")
