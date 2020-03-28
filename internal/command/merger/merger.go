@@ -35,7 +35,7 @@ var cmd = &cobra.Command{
 		log.Info("starting merger")
 
 		amqp := viper.GetString("amqp")
-		channel, err := queue.NewRabbitMQ(amqp)
+		channel, err := queue.NewRabbitMQ(context.Background(), amqp)
 
 		if err != nil {
 			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)

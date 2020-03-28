@@ -1,29 +1,85 @@
 package queue
 
 import (
+	"context"
+	"time"
+
+	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 	"gopkg.in/yaml.v2"
 )
 
 type rabbitmq struct {
-	conn *amqp.Connection
-	ch   *amqp.Channel
+	ctx        context.Context
+	url        string
+	connClosed chan *amqp.Error
+	chClosed   chan *amqp.Error
+	conn       *amqp.Connection
+	ch         *amqp.Channel
 }
 
-func NewRabbitMQ(url string) (Channel, error) {
-	conn, err := amqp.Dial(url)
+func NewRabbitMQ(ctx context.Context, url string) (Channel, error) {
+	client := &rabbitmq{ctx: ctx, url: url}
 
-	if err != nil {
-		return nil, err
+	client.connect()
+	go client.reconnect()
+
+	return client, nil
+}
+
+func (r *rabbitmq) connect() {
+	var err error
+
+	for {
+		r.conn, err = amqp.Dial(r.url)
+
+		if err != nil {
+			log.WithError(err).Warn("unable to connect to rabbitmq, retrying is 1 sec...")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		log.Debugf("connected to rabbitmq: %s", r.url)
+		r.connClosed = make(chan *amqp.Error)
+		r.conn.NotifyClose(r.connClosed)
+		r.openChanel()
+		return
 	}
+}
 
-	ch, err := conn.Channel()
+func (r *rabbitmq) openChanel() {
+	var err error
 
-	if err != nil {
-		return nil, err
+	for {
+		r.ch, err = r.conn.Channel()
+
+		if err != nil {
+			log.WithError(err).Warn("unable to open rabbitmq channel, retrying is 1 sec...")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		log.Debug("rabbitmq channel open")
+		r.chClosed = make(chan *amqp.Error)
+		r.ch.NotifyClose(r.chClosed)
+		return
 	}
+}
 
-	return &rabbitmq{conn: conn, ch: ch}, nil
+func (r *rabbitmq) reconnect() {
+	for {
+		select {
+		case <-r.ctx.Done():
+			_ = r.conn.Close()
+			return
+		case err := <-r.connClosed:
+			log.WithError(err).Warn("rabbitmq connection closed, reconnect")
+			r.connect()
+		case err := <-r.chClosed:
+			log.WithError(err).Warn("rabbitmq channel closed, reopen")
+			r.openChanel()
+		}
+	}
 }
 
 func (r *rabbitmq) CreateQueue(queue string) error {

@@ -44,7 +44,7 @@ var cmd = &cobra.Command{
 		log.Infof("connected to database '%s'", redisAddr)
 
 		amqp := viper.GetString("amqp")
-		channel, err := queue.NewRabbitMQ(amqp)
+		channel, err := queue.NewRabbitMQ(context.Background(), amqp)
 
 		if err != nil {
 			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
