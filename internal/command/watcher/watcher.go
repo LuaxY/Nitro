@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-redis/redis/v7"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/database"
@@ -30,20 +31,21 @@ var cmd = &cobra.Command{
 
 func Run() {
 	db, err := database.NewRedis(&redis.Options{
-		Addr: root.Cmd.Flag("redis").Value.String(),
+		Addr:     viper.GetString("redis"),
+		Password: viper.GetString("redis-password"),
 	})
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	channel, err := queue.NewRabbitMQ(root.Cmd.Flag("amqp").Value.String())
+	channel, err := queue.NewRabbitMQ(viper.GetString("amqp"))
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	bucket, err := storage.NewLocal(context.Background(), root.Cmd.Flag("storage").Value.String())
+	bucket, err := storage.NewLocal(context.Background(), viper.GetString("storage"))
 
 	if err != nil {
 		log.Fatal(err)

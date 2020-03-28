@@ -47,7 +47,7 @@ services:
       - ./example:/data
 
   rabbitmq:
-    image: "rabbitmq:3-management"
+    image: rabbitmq:3-management
     hostname: rabbitmq
     ports:
       - 15672:15672
@@ -57,3 +57,18 @@ services:
     image: redis:latest
     ports:
       - 6379:6379
+
+  influxdb:
+    image: quay.io/influxdb/influxdb:2.0.0-beta
+    ports:
+      - 9999:9999
+
+  telegraf:
+    image: telegraf
+    volumes:
+    - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - 3000:3000
