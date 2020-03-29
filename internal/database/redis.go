@@ -27,3 +27,7 @@ func (r *redisDb) Get(key string) (data string, err error) {
 func (r *redisDb) Set(key string, data string, expiration time.Duration) (err error) {
 	return r.client.Set(key, data, expiration).Err()
 }
+
+func (r *redisDb) Delete(key string) (err error) {
+	return r.client.Del(key).Err()
+}

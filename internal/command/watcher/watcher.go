@@ -300,5 +300,8 @@ func (w *watcher) HandlePackager(req *queue.PackagerResponse) error {
 	_ = w.bucket.Delete(req.UID + "/chunks")
 	_ = w.bucket.Delete(req.UID + "/encoded")
 
+	_ = w.db.Delete(req.UID)
+	_ = w.db.Delete(req.UID + ".total")
+
 	return nil
 }
