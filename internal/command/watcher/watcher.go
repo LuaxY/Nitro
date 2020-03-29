@@ -17,6 +17,7 @@ import (
 
 	"trancode/internal/command/root"
 	"trancode/internal/database"
+	"trancode/internal/metric"
 	"trancode/internal/queue"
 	"trancode/internal/storage"
 )
@@ -63,15 +64,30 @@ var cmd = &cobra.Command{
 		})
 
 		if err != nil {
-			log.Infof("connected to storage '%s'", bucketName)
+			log.WithError(err).Fatalf("unable to connect to storage '%s'", bucketName)
 		}
 
 		log.Infof("connected to storage '%s'", bucketName)
+
+		influxDbAddr := viper.GetString("influxdb")
+		metricClient, err := metric.NewInfluxdb(metric.InfluxdbConfig{
+			Addr:   influxDbAddr,
+			Token:  viper.GetString("influxdb-token"),
+			Bucket: viper.GetString("influxdb-bucket"),
+			Org:    viper.GetString("influxdb-org"),
+		})
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to connect to metrics '%s'", influxDbAddr)
+		}
+
+		log.Infof("connected to metrics '%s'", influxDbAddr)
 
 		w := watcher{
 			db:      db,
 			channel: channel,
 			bucket:  bucket,
+			metric:  metricClient,
 		}
 
 		w.Run()
@@ -86,6 +102,7 @@ type watcher struct {
 	db      database.Database
 	channel queue.Channel
 	bucket  storage.Bucket
+	metric  metric.Metric
 }
 
 func (w *watcher) Run() {
@@ -110,115 +127,79 @@ func (w *watcher) Run() {
 	totalChunksCache = make(map[string]int)
 
 	var wg sync.WaitGroup
-
 	log.Info("watcher started")
 
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("start watching splitter")
-		for {
-			var req queue.SplitterResponse
-			ok, err := w.channel.Consume("splitter.response", &req)
-
-			if err != nil {
-				log.WithError(err).Error("unable to consume splitter.response")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if !ok {
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if err := w.HandleSplitter(req); err != nil {
-				log.WithError(err).Error("error while handling splitter")
-			}
+	go w.watch(wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(req interface{}) error {
+		splitterResponse, ok := req.(*queue.SplitterResponse)
+		if !ok {
+			return errors.New("message is not queue.SplitterResponse")
 		}
-	}()
+		return w.HandleSplitter(splitterResponse)
+	})
 
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("start watching encoder")
-		for {
-			var req queue.EncoderResponse
-			ok, err := w.channel.Consume("encoder.response", &req)
-
-			if err != nil {
-				log.WithError(err).Error("unable to consume encoder.response")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if !ok {
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if err := w.HandleEncoder(req); err != nil {
-				log.WithError(err).Error("error while handling encoder")
-			}
+	go w.watch(wg, "encoder", "encoder.response", &queue.EncoderResponse{}, func(req interface{}) error {
+		encoderResponse, ok := req.(*queue.EncoderResponse)
+		if !ok {
+			return errors.New("message is not queue.EncoderResponse")
 		}
-	}()
+		return w.HandleEncoder(encoderResponse)
+	})
 
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("start watching merger")
-		for {
-			var req queue.MergerResponse
-			ok, err := w.channel.Consume("merger.response", &req)
-
-			if err != nil {
-				log.WithError(err).Error("unable to consume merger.response")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if !ok {
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if err := w.HandleMerger(req); err != nil {
-				log.WithError(err).Error("error while handling merger")
-			}
+	go w.watch(wg, "merger", "merger.response", &queue.MergerResponse{}, func(req interface{}) error {
+		mergerResponse, ok := req.(*queue.MergerResponse)
+		if !ok {
+			return errors.New("message is not queue.MergerResponse")
 		}
-	}()
+		return w.HandleMerger(mergerResponse)
+	})
 
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("start watching packager")
-		for {
-			var req queue.PackagerResponse
-			ok, err := w.channel.Consume("packager.response", &req)
-
-			if err != nil {
-				log.WithError(err).Error("unable to consume packager.response")
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if !ok {
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			if err := w.HandlePackager(req); err != nil {
-				log.WithError(err).Error("error while handling packager")
-			}
+	go w.watch(wg, "packager", "packager.response", &queue.PackagerResponse{}, func(req interface{}) error {
+		packagerResponse, ok := req.(*queue.PackagerResponse)
+		if !ok {
+			return errors.New("message is not queue.PackagerResponse")
 		}
-	}()
+		return w.HandlePackager(packagerResponse)
+	})
 
 	wg.Wait()
-
 	log.Info("watcher ended")
 }
 
-func (w *watcher) HandleSplitter(req queue.SplitterResponse) error {
+func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, msg interface{}, worker func(req interface{}) error) {
+	defer wg.Done()
+	log.Info("start watching ", taskName)
+	counter := 0
+
+	for {
+		ok, err := w.channel.Consume(queueName, msg)
+
+		if err != nil {
+			log.WithError(err).Error("unable to consume ", queueName)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		if !ok {
+			w.metric.Send(metric.RowMetric("nitro_watcher_tasks_count", metric.Tags{"task": taskName}, metric.Fields{"gauge": 0}))
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		counter++
+		w.metric.Send(metric.RowMetric("nitro_watcher_tasks_count", metric.Tags{"task": taskName}, metric.Fields{"gauge": 1}))
+		w.metric.Send(metric.RowMetric("nitro_watcher_tasks_total", metric.Tags{"task": taskName}, metric.Fields{"counter": counter}))
+
+		if err := worker(msg); err != nil {
+			log.WithError(err).Error("error while handling ", taskName)
+		}
+	}
+}
+
+func (w *watcher) HandleSplitter(req *queue.SplitterResponse) error {
 	log.WithFields(log.Fields{
 		"watch":        "splitter",
 		"uid":          req.UID,
@@ -248,7 +229,7 @@ func (w *watcher) HandleSplitter(req queue.SplitterResponse) error {
 	return nil
 }
 
-func (w *watcher) HandleEncoder(req queue.EncoderResponse) error {
+func (w *watcher) HandleEncoder(req *queue.EncoderResponse) error {
 	log.WithFields(log.Fields{
 		"watch":     "encoder",
 		"uid":       req.UID,
@@ -309,7 +290,7 @@ func (w *watcher) HandleEncoder(req queue.EncoderResponse) error {
 	return nil
 }
 
-func (w *watcher) HandleMerger(req queue.MergerResponse) error {
+func (w *watcher) HandleMerger(req *queue.MergerResponse) error {
 	log.WithFields(log.Fields{
 		"watch":     "merger",
 		"uid":       req.UID,
@@ -332,7 +313,7 @@ func (w *watcher) HandleMerger(req queue.MergerResponse) error {
 	return nil
 }
 
-func (w *watcher) HandlePackager(req queue.PackagerResponse) error {
+func (w *watcher) HandlePackager(req *queue.PackagerResponse) error {
 	log.WithFields(log.Fields{
 		"watch": "packager",
 		"uid":   req.UID,

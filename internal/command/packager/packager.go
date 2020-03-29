@@ -52,7 +52,7 @@ var cmd = &cobra.Command{
 		})
 
 		if err != nil {
-			log.Infof("connected to storage '%s'", bucketName)
+			log.WithError(err).Fatalf("unable to connect to storage '%s'", bucketName)
 		}
 
 		log.Infof("connected to storage '%s'", bucketName)

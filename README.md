@@ -9,7 +9,7 @@ Publish request in `splitter.request` queue
 
 ```yaml
 uid: example
-input: mux-video-intro.mp4
+input: inputs/mux-video-intro.mp4
 chunkTime: 5
 params:
   - profile: high

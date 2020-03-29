@@ -44,6 +44,8 @@ func init() {
 
 	Cmd.PersistentFlags().String("influxdb", "influxdb:9999", "InfluxDB endpoint")
 	Cmd.PersistentFlags().String("influxdb-token", "", "InfluxDB token")
+	Cmd.PersistentFlags().String("influxdb-bucket", "", "InfluxDB bucket")
+	Cmd.PersistentFlags().String("influxdb-org", "", "InfluxDB organization")
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
