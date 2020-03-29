@@ -8,15 +8,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
+	"trancode/internal/metric"
 	"trancode/internal/queue"
 	"trancode/internal/storage"
 	"trancode/internal/util"
@@ -29,37 +27,14 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "packager",
 	Run: func(cmd *cobra.Command, args []string) {
-		var err error
 		log.Info("starting packager")
 
-		amqp := viper.GetString("amqp")
-		channel, err := queue.NewRabbitMQ(context.Background(), amqp)
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
-		}
-
-		log.Infof("connected to queue '%s'", amqp)
-
-		//bucketName := viper.GetString("storage")
-		//bucket, err := storage.NewLocal(context.Background(), bucketName)
-
-		bucketName := viper.GetString("aws-bucket")
-		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
-			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
-			Region:      aws.String(viper.GetString("aws-region")),
-			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
-		})
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to storage '%s'", bucketName)
-		}
-
-		log.Infof("connected to storage '%s'", bucketName)
+		cmpt := root.GetComponent(false, true, true, true)
 
 		p := packager{
-			channel: channel,
-			bucket:  bucket,
+			channel: cmpt.Channel,
+			bucket:  cmpt.Bucket,
+			metric:  cmpt.Metric,
 		}
 
 		p.Run()
@@ -69,10 +44,28 @@ var cmd = &cobra.Command{
 type packager struct {
 	channel queue.Channel
 	bucket  storage.Bucket
+	metric  metric.Client
 }
 
 func (p *packager) Run() {
 	log.Info("packager started")
+
+	go p.metric.Ticker(context.Background(), 1*time.Second)
+
+	hostname, _ := os.Hostname()
+
+	counterMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_total", Tags: metric.Tags{"hostname": hostname}},
+		Counter:   0,
+	}
+
+	gaugeMetric := &metric.GaugeMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_count", Tags: metric.Tags{"hostname": hostname}},
+		Gauge:     0,
+	}
+
+	p.metric.Add(counterMetric)
+	p.metric.Add(gaugeMetric)
 
 	for {
 		var req queue.PackagerRequest
@@ -85,13 +78,25 @@ func (p *packager) Run() {
 		}
 
 		if !ok {
+			gaugeMetric.Gauge = 0
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
+		counterMetric.Counter++
+		gaugeMetric.Gauge = 1
+
+		started := time.Now()
+
 		if err = p.HandlePackager(req); err != nil {
 			log.WithError(err).Error("error while handling packager")
 		}
+
+		durationMetric := &metric.DurationMetric{
+			RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+			Duration:  time.Since(started),
+		}
+		p.metric.Send(durationMetric.Metric())
 	}
 }
 

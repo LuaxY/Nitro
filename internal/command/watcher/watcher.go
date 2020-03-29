@@ -3,17 +3,15 @@ package watcher
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/go-redis/redis/v7"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/database"
@@ -29,65 +27,15 @@ func init() {
 var cmd = &cobra.Command{
 	Use: "watcher",
 	Run: func(cmd *cobra.Command, args []string) {
-		var err error
 		log.Info("starting watcher")
 
-		redisAddr := viper.GetString("redis")
-		db, err := database.NewRedis(&redis.Options{
-			Addr:     redisAddr,
-			Password: viper.GetString("redis-password"),
-		})
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to database '%s'", redisAddr)
-		}
-
-		log.Infof("connected to database '%s'", redisAddr)
-
-		amqp := viper.GetString("amqp")
-		channel, err := queue.NewRabbitMQ(context.Background(), amqp)
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
-		}
-
-		log.Infof("connected to queue '%s'", amqp)
-
-		//bucketName := viper.GetString("storage")
-		//bucket, err := storage.NewLocal(context.Background(), bucketName)
-
-		bucketName := viper.GetString("aws-bucket")
-		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
-			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
-			Region:      aws.String(viper.GetString("aws-region")),
-			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
-		})
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to storage '%s'", bucketName)
-		}
-
-		log.Infof("connected to storage '%s'", bucketName)
-
-		influxDbAddr := viper.GetString("influxdb")
-		metricClient, err := metric.NewInfluxdb(metric.InfluxdbConfig{
-			Addr:   influxDbAddr,
-			Token:  viper.GetString("influxdb-token"),
-			Bucket: viper.GetString("influxdb-bucket"),
-			Org:    viper.GetString("influxdb-org"),
-		})
-
-		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to metrics '%s'", influxDbAddr)
-		}
-
-		log.Infof("connected to metrics '%s'", influxDbAddr)
+		cmpt := root.GetComponent(true, true, true, true)
 
 		w := watcher{
-			db:      db,
-			channel: channel,
-			bucket:  bucket,
-			metric:  metricClient,
+			db:      cmpt.DB,
+			channel: cmpt.Channel,
+			bucket:  cmpt.Bucket,
+			metric:  cmpt.Metric,
 		}
 
 		w.Run()
@@ -123,6 +71,8 @@ func (w *watcher) Run() {
 		log.Debugf("create queue '%s'", queueName)
 		_ = w.channel.CreateQueue(queueName)
 	}
+
+	go w.metric.Ticker(context.Background(), 1*time.Second)
 
 	totalChunksCache = make(map[string]int)
 
@@ -165,9 +115,6 @@ func (w *watcher) Run() {
 		return w.HandlePackager(packagerResponse)
 	})
 
-	wg.Add(1)
-	go w.metric.Ticker(1 * time.Second)
-
 	wg.Wait()
 	log.Info("watcher ended")
 }
@@ -176,18 +123,20 @@ func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, ms
 	defer wg.Done()
 	log.Info("start watching ", taskName)
 
-	counterMetric := metric.CounterMetric{
-		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_total", Tags: metric.Tags{"task": taskName}},
+	hostname, _ := os.Hostname()
+
+	counterMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_total", Tags: metric.Tags{"hostname": hostname, "task": taskName}},
 		Counter:   0,
 	}
 
-	gaugeMetric := metric.GaugeMetric{
-		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_count", Tags: metric.Tags{"task": taskName}},
+	gaugeMetric := &metric.GaugeMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_count", Tags: metric.Tags{"hostname": hostname, "task": taskName}},
 		Gauge:     0,
 	}
 
-	w.metric.Add(&counterMetric)
-	w.metric.Add(&gaugeMetric)
+	w.metric.Add(counterMetric)
+	w.metric.Add(gaugeMetric)
 
 	for {
 		ok, err := w.channel.Consume(queueName, msg)
@@ -207,9 +156,24 @@ func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, ms
 		counterMetric.Counter++
 		gaugeMetric.Gauge = 1
 
+		started := time.Now()
+
 		if err := callback(msg); err != nil {
 			log.WithError(err).Error("error while handling ", taskName)
 		}
+
+		uid := "unknown"
+		value := reflect.ValueOf(msg).Elem().FieldByName("UID")
+
+		if value.IsValid() {
+			uid = value.String()
+		}
+
+		durationMetric := &metric.DurationMetric{
+			RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_duration", Tags: metric.Tags{"hostname": hostname, "task": taskName, "uid": uid}},
+			Duration:  time.Since(started),
+		}
+		w.metric.Send(durationMetric.Metric())
 	}
 }
 

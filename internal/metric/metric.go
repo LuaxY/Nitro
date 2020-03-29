@@ -1,6 +1,7 @@
 package metric
 
 import (
+	"context"
 	"time"
 
 	"github.com/influxdata/influxdb-client-go"
@@ -9,7 +10,7 @@ import (
 type Client interface {
 	Add(metric Metric)
 	Send(metrics ...influxdb.Metric)
-	Ticker(duration time.Duration)
+	Ticker(ctx context.Context, duration time.Duration)
 }
 
 type Metric interface {
@@ -53,4 +54,18 @@ func (gm *GaugeMetric) Set(gauge int) {
 
 func (gm *GaugeMetric) Metric() influxdb.Metric {
 	return influxdb.NewRowMetric(Fields{"gauge": gm.Gauge}, gm.Name, gm.Tags, gm.Time)
+}
+
+type DurationMetric struct {
+	RowMetric
+	Duration time.Duration
+}
+
+func (dm *DurationMetric) Set(duration time.Duration) {
+	dm.Duration = duration
+	dm.Time = time.Now()
+}
+
+func (dm *DurationMetric) Metric() influxdb.Metric {
+	return influxdb.NewRowMetric(Fields{"duration": dm.Duration.Milliseconds()}, dm.Name, dm.Tags, dm.Time)
 }

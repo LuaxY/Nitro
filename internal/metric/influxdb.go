@@ -53,12 +53,14 @@ func (i *influx) Send(metrics ...influxdb.Metric) {
 	}
 }
 
-func (i *influx) Ticker(duration time.Duration) {
+func (i *influx) Ticker(ctx context.Context, duration time.Duration) {
 	ticker := time.NewTicker(duration)
 
 	for {
 		select {
-		// TODO context
+		case <-ctx.Done():
+			ticker.Stop()
+			return
 		case <-ticker.C:
 			metrics := make([]influxdb.Metric, len(i.metrics))
 			for i, metric := range i.metrics {
