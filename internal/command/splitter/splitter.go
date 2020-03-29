@@ -181,7 +181,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 		}
 
 		res.Chunks = append(res.Chunks, uid+"/chunks/"+info.Name())
-		return util.Upload(bucket, uid+"/chunks/"+info.Name(), path)
+		return util.Upload(bucket, uid+"/chunks/"+info.Name(), path, storage.PrivateACL)
 	})
 
 	if err != nil {
@@ -204,7 +204,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 		return nil, errors.Wrap(err, "unable to extract audio from master file with ffmpeg")
 	}
 
-	if err = util.Upload(bucket, uid+"/audio.m4a", workDir+"/audio.m4a"); err != nil {
+	if err = util.Upload(bucket, uid+"/audio.m4a", workDir+"/audio.m4a", storage.PublicACL); err != nil {
 		return nil, errors.Wrap(err, "unable to store audio file")
 	}
 

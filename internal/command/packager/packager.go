@@ -174,7 +174,7 @@ func pack(uid string, bucket storage.Bucket, qualities []int) (*result, error) {
 	files[uid+"/manifest.mpd"] = workDir + "/out/manifest.mpd"
 
 	for key, file := range files {
-		if err = util.Upload(bucket, key, file); err != nil {
+		if err = util.Upload(bucket, key, file, storage.PublicACL); err != nil {
 			return nil, errors.Wrapf(err, "unable to upload %s file", file)
 		}
 	}

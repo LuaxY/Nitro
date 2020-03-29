@@ -6,6 +6,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/pkg/errors"
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/s3blob"
 )
@@ -35,8 +37,18 @@ func (s *s3) Get(key string) (data []byte, err error) {
 	return s.bucket.ReadAll(s.ctx, key)
 }
 
-func (s *s3) Store(key string, data []byte) error {
-	return s.bucket.WriteAll(s.ctx, key, data, &blob.WriterOptions{})
+func (s *s3) Store(key string, data []byte, acl ACL) error {
+	before := func(asFunc func(interface{}) bool) error {
+		req := &s3manager.UploadInput{}
+		ok := asFunc(&req)
+		if !ok {
+			return errors.New("invalid s3 type")
+		}
+		req.ACL = aws.String(string(acl))
+		return nil
+	}
+
+	return s.bucket.WriteAll(s.ctx, key, data, &blob.WriterOptions{BeforeWrite: before})
 }
 
 func (s *s3) Delete(key string) error {

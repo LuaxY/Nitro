@@ -221,7 +221,7 @@ func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.P
 	for quality, encodedFilePath := range list {
 		filePath := fmt.Sprintf("%s/encoded/%d/%03d.mp4", uid, quality, id)
 
-		if err = util.Upload(bucket, filePath, encodedFilePath); err != nil {
+		if err = util.Upload(bucket, filePath, encodedFilePath, storage.PrivateACL); err != nil {
 			return nil, errors.Wrap(err, "unable to store encoded chunk file")
 		}
 

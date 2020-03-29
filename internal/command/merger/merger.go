@@ -213,7 +213,7 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 
 	finalPath := fmt.Sprintf("%s/%d.mp4", uid, quality)
 
-	if err = util.Upload(bucket, finalPath, workDir+"/merged.mp4"); err != nil {
+	if err = util.Upload(bucket, finalPath, workDir+"/merged.mp4", storage.PrivateACL); err != nil {
 		return nil, errors.Wrap(err, "unable to store merged file")
 	}
 

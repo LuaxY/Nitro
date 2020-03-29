@@ -26,7 +26,7 @@ func (l *local) Get(key string) (data []byte, err error) {
 	return l.bucket.ReadAll(l.ctx, key)
 }
 
-func (l *local) Store(key string, data []byte) error {
+func (l *local) Store(key string, data []byte, _ ACL) error {
 	return l.bucket.WriteAll(l.ctx, key, data, &blob.WriterOptions{})
 }
 

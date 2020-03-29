@@ -21,7 +21,7 @@ func Download(bucket storage.Bucket, key string, path string) error {
 	return ioutil.WriteFile(path, data, os.ModePerm)
 }
 
-func Upload(bucket storage.Bucket, key string, path string) error {
+func Upload(bucket storage.Bucket, key string, path string, acl storage.ACL) error {
 	log.Debugf("upload '%s' to '%s'", path, key)
 
 	data, err := ioutil.ReadFile(path)
@@ -30,5 +30,5 @@ func Upload(bucket storage.Bucket, key string, path string) error {
 		return err
 	}
 
-	return bucket.Store(key, data)
+	return bucket.Store(key, data, acl)
 }
