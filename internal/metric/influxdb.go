@@ -9,9 +9,10 @@ import (
 )
 
 type influx struct {
-	client *influxdb.Client
-	bucket string
-	org    string
+	client  *influxdb.Client
+	bucket  string
+	org     string
+	metrics []Metric
 }
 
 type InfluxdbConfig struct {
@@ -35,8 +36,8 @@ func NewInfluxdb(config InfluxdbConfig) (*influx, error) {
 	return &influx{client: client, bucket: config.Bucket, org: config.Org}, nil
 }
 
-func RowMetric(name string, tags Tags, fields Fields) influxdb.Metric {
-	return influxdb.NewRowMetric(fields, name, tags, time.Now())
+func (i *influx) Add(metric Metric) {
+	i.metrics = append(i.metrics, metric)
 }
 
 func (i *influx) Send(metrics ...influxdb.Metric) {
@@ -48,6 +49,22 @@ func (i *influx) Send(metrics ...influxdb.Metric) {
 				"tags":   tagsMap(metric.TagList()),
 				"fields": fieldsMap(metric.FieldList()),
 			}).Debug("metric not send")
+		}
+	}
+}
+
+func (i *influx) Ticker(duration time.Duration) {
+	ticker := time.NewTicker(duration)
+
+	for {
+		select {
+		// TODO context
+		case <-ticker.C:
+			metrics := make([]influxdb.Metric, len(i.metrics))
+			for i, metric := range i.metrics {
+				metrics[i] = metric.Metric()
+			}
+			i.Send(metrics...)
 		}
 	}
 }

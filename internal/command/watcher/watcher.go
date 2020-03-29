@@ -102,7 +102,7 @@ type watcher struct {
 	db      database.Database
 	channel queue.Channel
 	bucket  storage.Bucket
-	metric  metric.Metric
+	metric  metric.Client
 }
 
 func (w *watcher) Run() {
@@ -130,8 +130,8 @@ func (w *watcher) Run() {
 	log.Info("watcher started")
 
 	wg.Add(1)
-	go w.watch(wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(req interface{}) error {
-		splitterResponse, ok := req.(*queue.SplitterResponse)
+	go w.watch(wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(msg interface{}) error {
+		splitterResponse, ok := msg.(*queue.SplitterResponse)
 		if !ok {
 			return errors.New("message is not queue.SplitterResponse")
 		}
@@ -139,8 +139,8 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "encoder", "encoder.response", &queue.EncoderResponse{}, func(req interface{}) error {
-		encoderResponse, ok := req.(*queue.EncoderResponse)
+	go w.watch(wg, "encoder", "encoder.response", &queue.EncoderResponse{}, func(msg interface{}) error {
+		encoderResponse, ok := msg.(*queue.EncoderResponse)
 		if !ok {
 			return errors.New("message is not queue.EncoderResponse")
 		}
@@ -148,8 +148,8 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "merger", "merger.response", &queue.MergerResponse{}, func(req interface{}) error {
-		mergerResponse, ok := req.(*queue.MergerResponse)
+	go w.watch(wg, "merger", "merger.response", &queue.MergerResponse{}, func(msg interface{}) error {
+		mergerResponse, ok := msg.(*queue.MergerResponse)
 		if !ok {
 			return errors.New("message is not queue.MergerResponse")
 		}
@@ -157,22 +157,37 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "packager", "packager.response", &queue.PackagerResponse{}, func(req interface{}) error {
-		packagerResponse, ok := req.(*queue.PackagerResponse)
+	go w.watch(wg, "packager", "packager.response", &queue.PackagerResponse{}, func(msg interface{}) error {
+		packagerResponse, ok := msg.(*queue.PackagerResponse)
 		if !ok {
 			return errors.New("message is not queue.PackagerResponse")
 		}
 		return w.HandlePackager(packagerResponse)
 	})
 
+	wg.Add(1)
+	go w.metric.Ticker(1 * time.Second)
+
 	wg.Wait()
 	log.Info("watcher ended")
 }
 
-func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, msg interface{}, worker func(req interface{}) error) {
+func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, msg interface{}, callback func(msg interface{}) error) {
 	defer wg.Done()
 	log.Info("start watching ", taskName)
-	counter := 0
+
+	counterMetric := metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_total", Tags: metric.Tags{"task": taskName}},
+		Counter:   0,
+	}
+
+	gaugeMetric := metric.GaugeMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_count", Tags: metric.Tags{"task": taskName}},
+		Gauge:     0,
+	}
+
+	w.metric.Add(&counterMetric)
+	w.metric.Add(&gaugeMetric)
 
 	for {
 		ok, err := w.channel.Consume(queueName, msg)
@@ -184,16 +199,15 @@ func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, ms
 		}
 
 		if !ok {
-			w.metric.Send(metric.RowMetric("nitro_watcher_tasks_count", metric.Tags{"task": taskName}, metric.Fields{"gauge": 0}))
+			gaugeMetric.Gauge = 0
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		counter++
-		w.metric.Send(metric.RowMetric("nitro_watcher_tasks_count", metric.Tags{"task": taskName}, metric.Fields{"gauge": 1}))
-		w.metric.Send(metric.RowMetric("nitro_watcher_tasks_total", metric.Tags{"task": taskName}, metric.Fields{"counter": counter}))
+		counterMetric.Counter++
+		gaugeMetric.Gauge = 1
 
-		if err := worker(msg); err != nil {
+		if err := callback(msg); err != nil {
 			log.WithError(err).Error("error while handling ", taskName)
 		}
 	}
