@@ -26,8 +26,34 @@ func (l *local) Get(key string) (data []byte, err error) {
 	return l.bucket.ReadAll(l.ctx, key)
 }
 
+func (l *local) Read(key string, output io.Writer) (err error) {
+	reader, err := l.bucket.NewReader(l.ctx, key, nil)
+
+	if err != nil {
+		return err
+	}
+
+	defer reader.Close()
+
+	_, err = io.Copy(output, reader)
+	return err
+}
+
 func (l *local) Store(key string, data []byte, _ ACL) error {
 	return l.bucket.WriteAll(l.ctx, key, data, &blob.WriterOptions{})
+}
+
+func (l *local) Write(key string, input io.Reader, _ ACL) error {
+	writer, err := l.bucket.NewWriter(l.ctx, key, nil)
+
+	if err != nil {
+		return err
+	}
+
+	defer writer.Close()
+
+	_, err = io.Copy(writer, input)
+	return err
 }
 
 func (l *local) Delete(key string) error {

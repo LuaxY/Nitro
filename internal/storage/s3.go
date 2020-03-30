@@ -37,6 +37,19 @@ func (s *s3) Get(key string) (data []byte, err error) {
 	return s.bucket.ReadAll(s.ctx, key)
 }
 
+func (s *s3) Read(key string, output io.Writer) (err error) {
+	reader, err := s.bucket.NewReader(s.ctx, key, nil)
+
+	if err != nil {
+		return err
+	}
+
+	defer reader.Close()
+
+	_, err = io.Copy(output, reader)
+	return err
+}
+
 func (s *s3) Store(key string, data []byte, acl ACL) error {
 	before := func(asFunc func(interface{}) bool) error {
 		req := &s3manager.UploadInput{}
@@ -49,6 +62,29 @@ func (s *s3) Store(key string, data []byte, acl ACL) error {
 	}
 
 	return s.bucket.WriteAll(s.ctx, key, data, &blob.WriterOptions{BeforeWrite: before})
+}
+
+func (s *s3) Write(key string, input io.Reader, acl ACL) error {
+	before := func(asFunc func(interface{}) bool) error {
+		req := &s3manager.UploadInput{}
+		ok := asFunc(&req)
+		if !ok {
+			return errors.New("invalid s3 type")
+		}
+		req.ACL = aws.String(string(acl))
+		return nil
+	}
+
+	writer, err := s.bucket.NewWriter(s.ctx, key, &blob.WriterOptions{BeforeWrite: before})
+
+	if err != nil {
+		return err
+	}
+
+	defer writer.Close()
+
+	_, err = io.Copy(writer, input)
+	return err
 }
 
 func (s *s3) Delete(key string) error {
