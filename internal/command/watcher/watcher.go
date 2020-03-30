@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/signal"
 	"reflect"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
@@ -54,6 +56,21 @@ type watcher struct {
 }
 
 func (w *watcher) Run() {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-sigs // wait for signals
+		delay := 10 * time.Second
+		log.Warnf("signal received, try shutdown gracefully or kill app in %s...", delay)
+		cancel() // send done signal to context
+		timer := time.NewTimer(delay)
+		<-timer.C // wait some time to app shutdown gracefully
+		log.Warnf("app still not shutdown after %s, exit immediately", delay)
+		os.Exit(0) // force to kill app
+	}()
+
 	queueList := []string{
 		"splitter.request",
 		"splitter.response",
@@ -76,11 +93,10 @@ func (w *watcher) Run() {
 
 	totalChunksCache = make(map[string]int)
 
-	var wg sync.WaitGroup
 	log.Info("watcher started")
 
 	wg.Add(1)
-	go w.watch(wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(msg interface{}) error {
+	go w.watch(ctx, wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(msg interface{}) error {
 		splitterResponse, ok := msg.(*queue.SplitterResponse)
 		if !ok {
 			return errors.New("message is not queue.SplitterResponse")
@@ -89,7 +105,7 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "encoder", "encoder.response", &queue.EncoderResponse{}, func(msg interface{}) error {
+	go w.watch(ctx, wg, "encoder", "encoder.response", &queue.EncoderResponse{}, func(msg interface{}) error {
 		encoderResponse, ok := msg.(*queue.EncoderResponse)
 		if !ok {
 			return errors.New("message is not queue.EncoderResponse")
@@ -98,7 +114,7 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "merger", "merger.response", &queue.MergerResponse{}, func(msg interface{}) error {
+	go w.watch(ctx, wg, "merger", "merger.response", &queue.MergerResponse{}, func(msg interface{}) error {
 		mergerResponse, ok := msg.(*queue.MergerResponse)
 		if !ok {
 			return errors.New("message is not queue.MergerResponse")
@@ -107,7 +123,7 @@ func (w *watcher) Run() {
 	})
 
 	wg.Add(1)
-	go w.watch(wg, "packager", "packager.response", &queue.PackagerResponse{}, func(msg interface{}) error {
+	go w.watch(ctx, wg, "packager", "packager.response", &queue.PackagerResponse{}, func(msg interface{}) error {
 		packagerResponse, ok := msg.(*queue.PackagerResponse)
 		if !ok {
 			return errors.New("message is not queue.PackagerResponse")
@@ -119,8 +135,9 @@ func (w *watcher) Run() {
 	log.Info("watcher ended")
 }
 
-func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, msg interface{}, callback func(msg interface{}) error) {
+func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string, queueName string, msg interface{}, callback func(msg interface{}) error) {
 	defer wg.Done()
+
 	log.Info("start watching ", taskName)
 
 	hostname, _ := os.Hostname()
@@ -139,41 +156,47 @@ func (w *watcher) watch(wg sync.WaitGroup, taskName string, queueName string, ms
 	w.metric.Add(gaugeMetric)
 
 	for {
-		ok, err := w.channel.Consume(queueName, msg)
+		select {
+		case <-ctx.Done():
+			log.Info("stop watching ", taskName)
+			return
+		default:
+			ok, err := w.channel.Consume(queueName, msg)
 
-		if err != nil {
-			log.WithError(err).Error("unable to consume ", queueName)
-			time.Sleep(5 * time.Second)
-			continue
+			if err != nil {
+				log.WithError(err).Error("unable to consume ", queueName)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if !ok {
+				gaugeMetric.Gauge = 0
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			counterMetric.Counter++
+			gaugeMetric.Gauge = 1
+
+			started := time.Now()
+
+			if err := callback(msg); err != nil {
+				log.WithError(err).Error("error while handling ", taskName)
+			}
+
+			uid := "unknown"
+			value := reflect.ValueOf(msg).Elem().FieldByName("UID")
+
+			if value.IsValid() {
+				uid = value.String()
+			}
+
+			durationMetric := &metric.DurationMetric{
+				RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_duration", Tags: metric.Tags{"hostname": hostname, "task": taskName, "uid": uid}},
+				Duration:  time.Since(started),
+			}
+			w.metric.Send(durationMetric.Metric())
 		}
-
-		if !ok {
-			gaugeMetric.Gauge = 0
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		counterMetric.Counter++
-		gaugeMetric.Gauge = 1
-
-		started := time.Now()
-
-		if err := callback(msg); err != nil {
-			log.WithError(err).Error("error while handling ", taskName)
-		}
-
-		uid := "unknown"
-		value := reflect.ValueOf(msg).Elem().FieldByName("UID")
-
-		if value.IsValid() {
-			uid = value.String()
-		}
-
-		durationMetric := &metric.DurationMetric{
-			RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_duration", Tags: metric.Tags{"hostname": hostname, "task": taskName, "uid": uid}},
-			Duration:  time.Since(started),
-		}
-		w.metric.Send(durationMetric.Metric())
 	}
 }
 
