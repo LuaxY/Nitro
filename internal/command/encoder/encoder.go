@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"trancode/internal/command/root"
 	"trancode/internal/executor"
@@ -24,6 +25,8 @@ import (
 
 func init() {
 	root.Cmd.AddCommand(cmd)
+
+	cmd.PersistentFlags().Bool("cuda", false, "Enable CUDA")
 }
 
 var cmd = &cobra.Command{
@@ -190,8 +193,13 @@ func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.P
 		ffmpeg.Add("-maxrate", params.MaxRate)
 		ffmpeg.Add("-minrate", params.MinRate)
 		ffmpeg.Add("-bufsize", params.BufSize)
-		ffmpeg.Add("-preset", params.Preset)
-		ffmpeg.Add("-crf", strconv.Itoa(params.CRF))
+
+		if viper.GetBool("cuda") {
+			ffmpeg.Add("-preset", "fast")
+		} else {
+			ffmpeg.Add("-preset", params.Preset)
+			ffmpeg.Add("-crf", strconv.Itoa(params.CRF))
+		}
 
 		ffmpeg.Add("-sc_threshold", "0") // Sensitivity of x264's scenecut detection, 0 = no scene cut detection
 		ffmpeg.Add("-g", "60")           // GOP -> Group of Picture
