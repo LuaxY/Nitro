@@ -14,7 +14,7 @@ docker-compose up --build -d --scale encoder=2
 
 # Configuration
 
-Create .env file
+Create `nitro.env` file
 
 ```
 AMQP=

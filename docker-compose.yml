@@ -1,19 +1,5 @@
 version: '3.7'
 
-x-common-variables: &common-variables
-  - AMQP=amqp://guest:guest@rabbitmq:5672/
-  - REDIS=redis:6379
-  - REDIS_PASSWORD=
-  - AWS_BUCKET=
-  - AWS_REGION=
-  - AWS_ENDPOINT=
-  - AWS_ID=
-  - AWS_SECRET=
-  - INFLUXDB=https://influxdb:9999
-  - INFLUXDB_TOKEN=
-  - INFLUXDB_BUCKET=nitro
-  - INFLUXDB_ORG=nitro
-
 services:
   watcher:
     build: .
@@ -21,7 +7,8 @@ services:
     command: watcher
     volumes:
       - ./example:/data
-    environment: *common-variables
+    env_file:
+      - nitro.env
 
   splitter:
     build: .
@@ -29,7 +16,8 @@ services:
     command: splitter
     volumes:
       - ./example:/data
-    environment: *common-variables
+    env_file:
+      - nitro.env
 
   encoder:
     build: .
@@ -37,7 +25,8 @@ services:
     command: encoder
     volumes:
       - ./example:/data
-    environment: *common-variables
+    env_file:
+      - nitro.env
 
   merger:
     build: .
@@ -45,7 +34,8 @@ services:
     command: merger
     volumes:
       - ./example:/data
-    environment: *common-variables
+    env_file:
+      - nitro.env
 
   packager:
     build: .
@@ -53,7 +43,8 @@ services:
     command: packager
     volumes:
       - ./example:/data
-    environment: *common-variables
+    env_file:
+      - nitro.env
 
   rabbitmq:
     image: rabbitmq:3-management

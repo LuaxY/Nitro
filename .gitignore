@@ -1,3 +1,2 @@
 .idea/
-example/*
-!example/mux-video-intro.mp4
+nitro.env
