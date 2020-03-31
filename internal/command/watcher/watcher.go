@@ -146,8 +146,14 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 		Gauge:     0,
 	}
 
+	errorsMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_watcher_tasks_errors", Tags: metric.Tags{"hostname": hostname, "task": taskName}},
+		Counter:   0,
+	}
+
 	w.metric.Add(counterMetric)
 	w.metric.Add(gaugeMetric)
+	w.metric.Add(errorsMetric)
 
 	for {
 		select {
@@ -175,6 +181,7 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 			started := time.Now()
 
 			if err := callback(msg); err != nil {
+				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling ", taskName)
 			}
 

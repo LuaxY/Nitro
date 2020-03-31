@@ -70,8 +70,14 @@ func (s *splitter) Run() {
 		Gauge:     0,
 	}
 
+	errorsMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_splitter_tasks_errors", Tags: metric.Tags{"hostname": hostname}},
+		Counter:   0,
+	}
+
 	s.metric.Add(counterMetric)
 	s.metric.Add(gaugeMetric)
+	s.metric.Add(errorsMetric)
 
 loop:
 	for {
@@ -100,6 +106,7 @@ loop:
 			started := time.Now()
 
 			if err = s.HandleSplitter(ctx, req); err != nil {
+				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling splitter")
 			}
 

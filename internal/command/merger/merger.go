@@ -71,8 +71,14 @@ func (m *merger) Run() {
 		Gauge:     0,
 	}
 
+	errorsMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_merger_tasks_errors", Tags: metric.Tags{"hostname": hostname}},
+		Counter:   0,
+	}
+
 	m.metric.Add(counterMetric)
 	m.metric.Add(gaugeMetric)
+	m.metric.Add(errorsMetric)
 
 loop:
 	for {
@@ -101,6 +107,7 @@ loop:
 			started := time.Now()
 
 			if err = m.HandleMerger(ctx, req); err != nil {
+				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling merger")
 			}
 

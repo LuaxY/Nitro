@@ -77,8 +77,14 @@ func (e *encoder) Run() {
 		Gauge:     0,
 	}
 
+	errorsMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_errors", Tags: metric.Tags{"hostname": hostname}},
+		Counter:   0,
+	}
+
 	e.metric.Add(counterMetric)
 	e.metric.Add(gaugeMetric)
+	e.metric.Add(errorsMetric)
 
 	var last *queue.EncoderRequest
 
@@ -125,6 +131,7 @@ loop:
 
 			if err = e.HandleEncoder(ctx, req); err != nil {
 				// TODO how recover work ?
+				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling encoder")
 			}
 

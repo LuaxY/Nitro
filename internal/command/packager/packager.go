@@ -69,8 +69,14 @@ func (p *packager) Run() {
 		Gauge:     0,
 	}
 
+	errorsMetric := &metric.CounterMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_errors", Tags: metric.Tags{"hostname": hostname}},
+		Counter:   0,
+	}
+
 	p.metric.Add(counterMetric)
 	p.metric.Add(gaugeMetric)
+	p.metric.Add(errorsMetric)
 
 loop:
 	for {
@@ -99,6 +105,7 @@ loop:
 			started := time.Now()
 
 			if err = p.HandlePackager(ctx, req); err != nil {
+				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling packager")
 			}
 

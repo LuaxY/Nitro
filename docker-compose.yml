@@ -1,50 +1,59 @@
 version: '3.7'
+
+x-common-variables: &common-variables
+  - AMQP=amqp://guest:guest@rabbitmq:5672/
+  - REDIS=redis:6379
+  - REDIS_PASSWORD=
+  - AWS_BUCKET=
+  - AWS_REGION=
+  - AWS_ENDPOINT=
+  - AWS_ID=
+  - AWS_SECRET=
+  - INFLUXDB=https://influxdb:9999
+  - INFLUXDB_TOKEN=
+  - INFLUXDB_BUCKET=nitro
+  - INFLUXDB_ORG=nitro
+
 services:
   watcher:
     build: .
     restart: always
-    entrypoint: ["/transcode", "watcher"]
-    depends_on:
-      - rabbitmq
-      - redis
+    command: watcher
     volumes:
       - ./example:/data
+    environment: *common-variables
 
   splitter:
     build: .
     restart: always
-    entrypoint: ["/transcode", "splitter"]
-    depends_on:
-      - rabbitmq
+    command: splitter
     volumes:
       - ./example:/data
+    environment: *common-variables
 
   encoder:
     build: .
     restart: always
-    entrypoint: ["/transcode", "encoder"]
-    depends_on:
-      - rabbitmq
+    command: encoder
     volumes:
       - ./example:/data
+    environment: *common-variables
 
   merger:
     build: .
     restart: always
-    entrypoint: ["/transcode", "merger"]
-    depends_on:
-      - rabbitmq
+    command: merger
     volumes:
       - ./example:/data
+    environment: *common-variables
 
   packager:
     build: .
     restart: always
-    entrypoint: ["/transcode", "packager"]
-    depends_on:
-      - rabbitmq
+    command: packager
     volumes:
       - ./example:/data
+    environment: *common-variables
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -62,13 +71,13 @@ services:
     image: quay.io/influxdb/influxdb:2.0.0-beta
     ports:
       - 9999:9999
-
-  telegraf:
-    image: telegraf
-    volumes:
-    - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
-
-  grafana:
-    image: grafana/grafana
-    ports:
-      - 3000:3000
+#
+#  telegraf:
+#    image: telegraf
+#    volumes:
+#    - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+#
+#  grafana:
+#    image: grafana/grafana
+#    ports:
+#      - 3000:3000
