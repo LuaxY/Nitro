@@ -15,13 +15,13 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"trancode/internal/command/root"
-	"trancode/internal/executor"
-	"trancode/internal/metric"
-	"trancode/internal/queue"
-	"trancode/internal/signal"
-	"trancode/internal/storage"
-	"trancode/internal/util"
+	"nitro/internal/command/root"
+	"nitro/internal/executor"
+	"nitro/internal/metric"
+	"nitro/internal/queue"
+	"nitro/internal/signal"
+	"nitro/internal/storage"
+	"nitro/internal/util"
 )
 
 func init() {
@@ -31,7 +31,9 @@ func init() {
 }
 
 var cmd = &cobra.Command{
-	Use: "encoder",
+	Use:   "encoder",
+	Short: "Encode video chunks",
+	Long:  `Nitro Encoder: encode requested video chunk in different qualities`,
 	Run: func(cmd *cobra.Command, args []string) {
 		log.Info("starting encoder")
 

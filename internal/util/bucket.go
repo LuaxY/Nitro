@@ -5,7 +5,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"trancode/internal/storage"
+	"nitro/internal/storage"
 )
 
 func Download(bucket storage.Bucket, key string, path string) error {

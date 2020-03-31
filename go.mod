@@ -1,4 +1,4 @@
-module trancode
+module nitro
 
 go 1.14
 

@@ -1,8 +1,53 @@
-# Transcoder V2
+# Nitro
+
+Distributed video encoder pipeline
+
+___
+
+# Deployment
+
+## With Docker Compose
 
 ```
-docker-compose up --build -d
-docker-compose scale encoder=3
+docker-compose up --build -d --scale encoder=2
+```
+
+# Configuration
+
+Create .env file
+
+```
+AMQP=
+REDIS=
+REDIS_PASSWORD=
+AWS_BUCKET=
+AWS_REGION=
+AWS_ENDPOINT=
+AWS_ID=
+AWS_SECRET
+INFLUXDB=
+INFLUXDB_TOKEN=
+INFLUXDB_BUCKET=
+INFLUXDB_ORG=
+```
+
+# Usage
+
+
+```
+Nitro - Distributed video encoder pipeline
+
+Usage:
+  nitro [flags]
+  nitro [command]
+
+Available Commands:
+  encoder     Encode video chunks
+  help        Help about any command
+  merger      Merge video chunks
+  packager    Create streaming manifests
+  splitter    Split video into chunks
+  watcher     Orchestrate the pipeline
 ```
 
 Publish request in `splitter.request` queue

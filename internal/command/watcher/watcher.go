@@ -13,12 +13,12 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"trancode/internal/command/root"
-	"trancode/internal/database"
-	"trancode/internal/metric"
-	"trancode/internal/queue"
-	"trancode/internal/signal"
-	"trancode/internal/storage"
+	"nitro/internal/command/root"
+	"nitro/internal/database"
+	"nitro/internal/metric"
+	"nitro/internal/queue"
+	"nitro/internal/signal"
+	"nitro/internal/storage"
 )
 
 func init() {
@@ -26,7 +26,9 @@ func init() {
 }
 
 var cmd = &cobra.Command{
-	Use: "watcher",
+	Use:   "watcher",
+	Short: "Orchestrate the pipeline",
+	Long:  `Nitro Watcher: orchestrator of pipeline, watch response to create next component request`,
 	Run: func(cmd *cobra.Command, args []string) {
 		log.Info("starting watcher")
 

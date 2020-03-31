@@ -14,13 +14,13 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"trancode/internal/command/root"
-	"trancode/internal/executor"
-	"trancode/internal/metric"
-	"trancode/internal/queue"
-	"trancode/internal/signal"
-	"trancode/internal/storage"
-	"trancode/internal/util"
+	"nitro/internal/command/root"
+	"nitro/internal/executor"
+	"nitro/internal/metric"
+	"nitro/internal/queue"
+	"nitro/internal/signal"
+	"nitro/internal/storage"
+	"nitro/internal/util"
 )
 
 func init() {
@@ -28,7 +28,9 @@ func init() {
 }
 
 var cmd = &cobra.Command{
-	Use: "merger",
+	Use:   "merger",
+	Short: "Merge video chunks",
+	Long:  `Nitro Merger: merge video chunks for each qualities`,
 	Run: func(cmd *cobra.Command, args []string) {
 		log.Info("starting merger")
 

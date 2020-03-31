@@ -13,16 +13,16 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"trancode/internal/database"
-	"trancode/internal/metric"
-	"trancode/internal/queue"
-	"trancode/internal/storage"
+	"nitro/internal/database"
+	"nitro/internal/metric"
+	"nitro/internal/queue"
+	"nitro/internal/storage"
 )
 
 var Cmd = &cobra.Command{
-	Use:   "transcoder",
-	Short: "WatchNow Transcoder",
-	Long:  `WatchNow Transcoder`,
+	Use:   "nitro",
+	Short: "Nitro",
+	Long:  `Nitro - Distributed video encoder pipeline`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Usage()
 	},
