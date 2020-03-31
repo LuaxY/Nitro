@@ -27,6 +27,7 @@ import (
 func init() {
 	root.Cmd.AddCommand(cmd)
 
+	cmd.PersistentFlags().String("provider", "unknown", "Cloud provider")
 	cmd.PersistentFlags().Bool("cuda", false, "Enable CUDA")
 }
 
@@ -40,9 +41,10 @@ var cmd = &cobra.Command{
 		cmpt := root.GetComponent(false, true, true, true)
 
 		e := encoder{
-			channel: cmpt.Channel,
-			bucket:  cmpt.Bucket,
-			metric:  cmpt.Metric,
+			channel:  cmpt.Channel,
+			bucket:   cmpt.Bucket,
+			metric:   cmpt.Metric,
+			provider: viper.GetString("provider"),
 		}
 
 		e.Run()
@@ -50,9 +52,10 @@ var cmd = &cobra.Command{
 }
 
 type encoder struct {
-	channel queue.Channel
-	bucket  storage.Bucket
-	metric  metric.Client
+	channel  queue.Channel
+	bucket   storage.Bucket
+	metric   metric.Client
+	provider string
 }
 
 func (e *encoder) Run() {
@@ -128,7 +131,7 @@ loop:
 			last = nil
 
 			durationMetric := &metric.DurationMetric{
-				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"provider": e.provider, "hostname": hostname, "uid": req.UID}},
 				Duration:  time.Since(started),
 			}
 			e.metric.Send(durationMetric.Metric())
