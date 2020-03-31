@@ -70,7 +70,6 @@ func (w *watcher) Run() {
 		"thumbnail.response",
 	}
 
-	// TODO re-CreateQueue om reconnect
 	for _, queueName := range queueList {
 		log.Debugf("create queue '%s'", queueName)
 		_ = w.channel.CreateQueue(queueName)

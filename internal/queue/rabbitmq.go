@@ -16,6 +16,7 @@ type rabbitmq struct {
 	chClosed   chan *amqp.Error
 	conn       *amqp.Connection
 	ch         *amqp.Channel
+	queues     []string
 }
 
 func NewRabbitMQ(ctx context.Context, url string) (Channel, error) {
@@ -62,6 +63,13 @@ func (r *rabbitmq) openChanel() {
 		log.Debug("rabbitmq channel open")
 		r.chClosed = make(chan *amqp.Error)
 		r.ch.NotifyClose(r.chClosed)
+
+		for _, queue := range r.queues {
+			if _, err := r.ch.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+				log.WithError(err).Warnf("unable to redeclare queue '%s'", queue)
+			}
+		}
+
 		return
 	}
 }
@@ -83,6 +91,7 @@ func (r *rabbitmq) reconnect() {
 }
 
 func (r *rabbitmq) CreateQueue(queue string) error {
+	r.queues = append(r.queues, queue)
 	_, err := r.ch.QueueDeclare(queue, true, false, false, false, nil)
 	return err
 }
