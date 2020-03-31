@@ -119,8 +119,11 @@ loop:
 			started := time.Now()
 
 			if err = e.HandleEncoder(ctx, req); err != nil {
+				// TODO how recover work ?
 				log.WithError(err).Error("error while handling encoder")
 			}
+
+			last = nil
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
