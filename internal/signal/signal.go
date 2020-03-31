@@ -17,7 +17,7 @@ func WatchInterrupt(ctx context.Context, forceShutdownDelay time.Duration) conte
 
 	go func() {
 		<-sigs // wait for signals
-		log.Warnf("signal received, try shutdown gracefully or kill app in %s...", forceShutdownDelay)
+		log.Warnf("interrupt signal received, try shutdown gracefully or kill app in %s...", forceShutdownDelay)
 		cancel() // send done signal to context
 		timer := time.NewTimer(forceShutdownDelay)
 		<-timer.C // wait some time to app shutdown gracefully

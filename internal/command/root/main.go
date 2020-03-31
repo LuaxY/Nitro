@@ -29,6 +29,9 @@ var Cmd = &cobra.Command{
 }
 
 func Execute() {
+	if viper.GetBool("json-log") {
+		log.SetFormatter(&log.JSONFormatter{})
+	}
 	log.SetLevel(log.DebugLevel)
 
 	if err := Cmd.Execute(); err != nil {
@@ -38,6 +41,8 @@ func Execute() {
 }
 
 func init() {
+	Cmd.PersistentFlags().Bool("json-log", false, "Format log into JSON")
+
 	Cmd.PersistentFlags().String("storage", "/data", "Storage bucket")
 
 	Cmd.PersistentFlags().String("aws-bucket", "", "AWS bucket")
