@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +19,7 @@ func NewExecutor(logger io.Writer) *Executor {
 	return e
 }
 
-func (e *Executor) Run(command *Cmd) error {
+func (e *Executor) Run(ctx context.Context, command *Cmd) error {
 	_, _ = io.WriteString(e.logger, "> "+command.Binary+" "+strings.Join(command.args, " ")+"\n")
 	fmt.Println("> " + command.Binary + " " + strings.Join(command.args, " ")) // TEMP
 
@@ -26,7 +27,7 @@ func (e *Executor) Run(command *Cmd) error {
 
 	_, _ = io.WriteString(e.logger, start.String()+"\n")
 
-	cmd := exec.Command(command.Binary, command.args...)
+	cmd := exec.CommandContext(ctx, command.Binary, command.args...)
 	cmd.Stdout = io.MultiWriter(e.logger, os.Stdout)
 	cmd.Stderr = io.MultiWriter(e.logger, os.Stderr)
 	cmd.Env = append(os.Environ(), command.envs...)

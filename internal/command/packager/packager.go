@@ -16,6 +16,7 @@ import (
 	"trancode/internal/executor"
 	"trancode/internal/metric"
 	"trancode/internal/queue"
+	"trancode/internal/signal"
 	"trancode/internal/storage"
 	"trancode/internal/util"
 )
@@ -48,6 +49,8 @@ type packager struct {
 }
 
 func (p *packager) Run() {
+	ctx := signal.WatchInterrupt(context.Background(), 10*time.Second)
+
 	log.Info("packager started")
 
 	go p.metric.Ticker(context.Background(), 1*time.Second)
@@ -67,47 +70,53 @@ func (p *packager) Run() {
 	p.metric.Add(counterMetric)
 	p.metric.Add(gaugeMetric)
 
+loop:
 	for {
-		var req queue.PackagerRequest
-		ok, err := p.channel.Consume("packager.request", &req)
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+			var req queue.PackagerRequest
+			ok, err := p.channel.Consume("packager.request", &req)
 
-		if err != nil {
-			log.WithError(err).Error("unable to consume packager.request")
-			time.Sleep(5 * time.Second)
-			continue
+			if err != nil {
+				log.WithError(err).Error("unable to consume packager.request")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if !ok {
+				gaugeMetric.Gauge = 0
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			counterMetric.Counter++
+			gaugeMetric.Gauge = 1
+
+			started := time.Now()
+
+			if err = p.HandlePackager(ctx, req); err != nil {
+				log.WithError(err).Error("error while handling packager")
+			}
+
+			durationMetric := &metric.DurationMetric{
+				RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+				Duration:  time.Since(started),
+			}
+			p.metric.Send(durationMetric.Metric())
 		}
-
-		if !ok {
-			gaugeMetric.Gauge = 0
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		counterMetric.Counter++
-		gaugeMetric.Gauge = 1
-
-		started := time.Now()
-
-		if err = p.HandlePackager(req); err != nil {
-			log.WithError(err).Error("error while handling packager")
-		}
-
-		durationMetric := &metric.DurationMetric{
-			RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
-			Duration:  time.Since(started),
-		}
-		p.metric.Send(durationMetric.Metric())
 	}
 }
 
-func (p *packager) HandlePackager(req queue.PackagerRequest) error {
+func (p *packager) HandlePackager(ctx context.Context, req queue.PackagerRequest) error {
 	log.WithFields(log.Fields{
 		"app":       "packager",
 		"uid":       req.UID,
 		"qualities": req.Qualities,
 	}).Info("receive merger request")
 
-	_, err := pack(req.UID, p.bucket, req.Qualities)
+	_, err := pack(ctx, req.UID, p.bucket, req.Qualities)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while packing '%s'", req.UID)
@@ -131,7 +140,7 @@ type result struct {
 	Path string
 }
 
-func pack(uid string, bucket storage.Bucket, qualities []int) (*result, error) {
+func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []int) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "pack")
 
 	if err != nil {
@@ -146,25 +155,25 @@ func pack(uid string, bucket storage.Bucket, qualities []int) (*result, error) {
 
 	files := make(map[string]string)
 	exec := executor.NewExecutor(&bytes.Buffer{})
-	packager := &executor.Cmd{Binary: "packager"}
+	shakaPackager := &executor.Cmd{Binary: "packager"}
 
 	for _, quality := range qualities {
 		if err = util.Download(bucket, fmt.Sprintf("%s/%d.mp4", uid, quality), fmt.Sprintf("%s/%d.mp4", workDir, quality)); err != nil {
 			return nil, errors.Wrap(err, "unable to get video file")
 		}
 
-		packager.Add(fmt.Sprintf("in=%[1]s/%[2]d.mp4,stream=video,output=%[1]s/out/%[2]d.mp4,playlist_name=%[1]s/out/%[2]d.m3u8,iframe_playlist_name=%[1]s/out/%[2]d_iframe.m3u8", workDir, quality))
+		shakaPackager.Add(fmt.Sprintf("in=%[1]s/%[2]d.mp4,stream=video,output=%[1]s/out/%[2]d.mp4,playlist_name=%[1]s/out/%[2]d.m3u8,iframe_playlist_name=%[1]s/out/%[2]d_iframe.m3u8", workDir, quality))
 
 		files[fmt.Sprintf("%s/%d.mp4", uid, quality)] = fmt.Sprintf("%s/out/%d.mp4", workDir, quality)
 		files[fmt.Sprintf("%s/%d.m3u8", uid, quality)] = fmt.Sprintf("%s/out/%d.m3u8", workDir, quality)
 		files[fmt.Sprintf("%s/%d_iframe.m3u8", uid, quality)] = fmt.Sprintf("%s/out/%d_iframe.m3u8", workDir, quality)
 	}
 
-	packager.Add(fmt.Sprintf("in=%[1]s/audio.m4a,stream=audio,output=%[1]s/out/audio.m4a,playlist_name=%[1]s/out/audio.m3u8,hls_group_id=audio", workDir))
-	packager.Add("--hls_master_playlist_output", fmt.Sprintf("%s/out/master.m3u8", workDir))
-	packager.Add("--mpd_output", fmt.Sprintf("%s/out/manifest.mpd", workDir))
+	shakaPackager.Add(fmt.Sprintf("in=%[1]s/audio.m4a,stream=audio,output=%[1]s/out/audio.m4a,playlist_name=%[1]s/out/audio.m3u8,hls_group_id=audio", workDir))
+	shakaPackager.Add("--hls_master_playlist_output", fmt.Sprintf("%s/out/master.m3u8", workDir))
+	shakaPackager.Add("--mpd_output", fmt.Sprintf("%s/out/manifest.mpd", workDir))
 
-	if err := exec.Run(packager); err != nil {
+	if err := exec.Run(ctx, shakaPackager); err != nil {
 		return nil, errors.Wrap(err, "error while executing packager")
 	}
 

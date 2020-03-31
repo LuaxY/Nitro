@@ -18,6 +18,7 @@ import (
 	"trancode/internal/executor"
 	"trancode/internal/metric"
 	"trancode/internal/queue"
+	"trancode/internal/signal"
 	"trancode/internal/storage"
 	"trancode/internal/util"
 )
@@ -50,6 +51,8 @@ type merger struct {
 }
 
 func (m *merger) Run() {
+	ctx := signal.WatchInterrupt(context.Background(), 10*time.Second)
+
 	log.Info("merger started")
 
 	go m.metric.Ticker(context.Background(), 1*time.Second)
@@ -69,40 +72,46 @@ func (m *merger) Run() {
 	m.metric.Add(counterMetric)
 	m.metric.Add(gaugeMetric)
 
+loop:
 	for {
-		var req queue.MergerRequest
-		ok, err := m.channel.Consume("merger.request", &req)
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+			var req queue.MergerRequest
+			ok, err := m.channel.Consume("merger.request", &req)
 
-		if err != nil {
-			log.WithError(err).Error("unable to consume merger.request")
-			time.Sleep(5 * time.Second)
-			continue
+			if err != nil {
+				log.WithError(err).Error("unable to consume merger.request")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if !ok {
+				gaugeMetric.Gauge = 0
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			counterMetric.Counter++
+			gaugeMetric.Gauge = 1
+
+			started := time.Now()
+
+			if err = m.HandleMerger(ctx, req); err != nil {
+				log.WithError(err).Error("error while handling merger")
+			}
+
+			durationMetric := &metric.DurationMetric{
+				RowMetric: metric.RowMetric{Name: "nitro_merger_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+				Duration:  time.Since(started),
+			}
+			m.metric.Send(durationMetric.Metric())
 		}
-
-		if !ok {
-			gaugeMetric.Gauge = 0
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		counterMetric.Counter++
-		gaugeMetric.Gauge = 1
-
-		started := time.Now()
-
-		if err = m.HandleMerger(req); err != nil {
-			log.WithError(err).Error("error while handling merger")
-		}
-
-		durationMetric := &metric.DurationMetric{
-			RowMetric: metric.RowMetric{Name: "nitro_merger_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
-			Duration:  time.Since(started),
-		}
-		m.metric.Send(durationMetric.Metric())
 	}
 }
 
-func (m *merger) HandleMerger(req queue.MergerRequest) error {
+func (m *merger) HandleMerger(ctx context.Context, req queue.MergerRequest) error {
 	log.WithFields(log.Fields{
 		"app": "merger",
 		"uid": req.UID,
@@ -122,7 +131,7 @@ func (m *merger) HandleMerger(req queue.MergerRequest) error {
 	var qualities []int
 
 	for quality, chunks := range list {
-		_, err := merge(req.UID, m.bucket, quality, chunks)
+		_, err := merge(ctx, req.UID, m.bucket, quality, chunks)
 
 		if err != nil {
 			return errors.Wrapf(err, "error while merging '%s' %d", req.UID, quality)
@@ -152,7 +161,7 @@ type result struct {
 	Path string
 }
 
-func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string) (*result, error) {
+func merge(ctx context.Context, uid string, bucket storage.Bucket, quality int, chunks map[int]string) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "merge")
 
 	if err != nil {
@@ -205,7 +214,7 @@ func merge(uid string, bucket storage.Bucket, quality int, chunks map[int]string
 	ffmpeg.Add("-i", workDir+"/list.txt")
 	ffmpeg.Add("-c", "copy")
 	ffmpeg.Add(workDir + "/merged.mp4")
-	err = exec.Run(ffmpeg)
+	err = exec.Run(ctx, ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to merge chunk files with ffmpeg")

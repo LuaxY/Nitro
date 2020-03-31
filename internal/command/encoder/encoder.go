@@ -19,6 +19,7 @@ import (
 	"trancode/internal/executor"
 	"trancode/internal/metric"
 	"trancode/internal/queue"
+	"trancode/internal/signal"
 	"trancode/internal/storage"
 	"trancode/internal/util"
 )
@@ -53,6 +54,8 @@ type encoder struct {
 }
 
 func (e *encoder) Run() {
+	ctx := signal.WatchInterrupt(context.Background(), 25*time.Second)
+
 	log.Info("encoder started")
 
 	go e.metric.Ticker(context.Background(), 1*time.Second)
@@ -72,37 +75,62 @@ func (e *encoder) Run() {
 	e.metric.Add(counterMetric)
 	e.metric.Add(gaugeMetric)
 
+	var last *queue.EncoderRequest
+
+loop:
 	for {
-		var req queue.EncoderRequest
-		ok, err := e.channel.Consume("encoder.request", &req)
+		select {
+		case <-ctx.Done():
+			// Requeue last chunk if shutdown signal is receive
+			if last != nil {
+				if err := e.channel.Publish("encoder.request", last); err != nil {
+					log.WithError(err).Error("unable to requeue last chunk")
+					break loop
+				}
 
-		if err != nil {
-			log.WithError(err).Error("unable to consume encoder.request")
-			time.Sleep(5 * time.Second)
-			continue
+				log.WithFields(log.Fields{
+					"app":   "encoder",
+					"uid":   last.UID,
+					"chunk": last.Chunk,
+				}).Info("requeue last chunk")
+			}
+			break loop
+		default:
+			var req queue.EncoderRequest
+			ok, err := e.channel.Consume("encoder.request", &req)
+
+			if err != nil {
+				log.WithError(err).Error("unable to consume encoder.request")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if !ok {
+				gaugeMetric.Gauge = 0
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			last = &req
+
+			counterMetric.Counter++
+			gaugeMetric.Gauge = 1
+
+			started := time.Now()
+
+			if err = e.HandleEncoder(ctx, req); err != nil {
+				log.WithError(err).Error("error while handling encoder")
+			}
+
+			durationMetric := &metric.DurationMetric{
+				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+				Duration:  time.Since(started),
+			}
+			e.metric.Send(durationMetric.Metric())
 		}
-
-		if !ok {
-			gaugeMetric.Gauge = 0
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		counterMetric.Counter++
-		gaugeMetric.Gauge = 1
-
-		started := time.Now()
-
-		if err = e.HandleEncoder(req); err != nil {
-			log.WithError(err).Error("error while handling encoder")
-		}
-
-		durationMetric := &metric.DurationMetric{
-			RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
-			Duration:  time.Since(started),
-		}
-		e.metric.Send(durationMetric.Metric())
 	}
+
+	log.Info("watcher ended")
 }
 
 type result struct {
@@ -110,14 +138,14 @@ type result struct {
 	Qualities map[int]string
 }
 
-func (e *encoder) HandleEncoder(req queue.EncoderRequest) error {
+func (e *encoder) HandleEncoder(ctx context.Context, req queue.EncoderRequest) error {
 	log.WithFields(log.Fields{
 		"app":   "encoder",
 		"uid":   req.UID,
 		"chunk": req.Chunk,
 	}).Info("receive encoder request")
 
-	encodedFile, err := encode(req.UID, e.bucket, req.Chunk, req.Params)
+	encodedFile, err := encode(ctx, req.UID, e.bucket, req.Chunk, req.Params)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while encoding '%s'", req.UID)
@@ -140,7 +168,7 @@ func (e *encoder) HandleEncoder(req queue.EncoderRequest) error {
 	return nil
 }
 
-func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.Params) (*result, error) {
+func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePath string, p []queue.Params) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "encode")
 
 	if err != nil {
@@ -220,7 +248,7 @@ func encode(uid string, bucket storage.Bucket, chunkFilePath string, p []queue.P
 		list[params.Height] = encodedFilePath
 	}
 
-	err = exec.Run(ffmpeg)
+	err = exec.Run(ctx, ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to encode chunk with ffmpeg")

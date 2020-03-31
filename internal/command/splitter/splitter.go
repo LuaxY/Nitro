@@ -17,6 +17,7 @@ import (
 	"trancode/internal/executor"
 	"trancode/internal/metric"
 	"trancode/internal/queue"
+	"trancode/internal/signal"
 	"trancode/internal/storage"
 	"trancode/internal/util"
 )
@@ -49,6 +50,8 @@ type splitter struct {
 }
 
 func (s *splitter) Run() {
+	ctx := signal.WatchInterrupt(context.Background(), 10*time.Second)
+
 	log.Info("splitter started")
 
 	go s.metric.Ticker(context.Background(), 1*time.Second)
@@ -68,40 +71,46 @@ func (s *splitter) Run() {
 	s.metric.Add(counterMetric)
 	s.metric.Add(gaugeMetric)
 
+loop:
 	for {
-		var req queue.SplitterRequest
-		ok, err := s.channel.Consume("splitter.request", &req)
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+			var req queue.SplitterRequest
+			ok, err := s.channel.Consume("splitter.request", &req)
 
-		if err != nil {
-			log.WithError(err).Error("unable to consume splitter.request")
-			time.Sleep(5 * time.Second)
-			continue
+			if err != nil {
+				log.WithError(err).Error("unable to consume splitter.request")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if !ok {
+				gaugeMetric.Gauge = 0
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			counterMetric.Counter++
+			gaugeMetric.Gauge = 1
+
+			started := time.Now()
+
+			if err = s.HandleSplitter(ctx, req); err != nil {
+				log.WithError(err).Error("error while handling splitter")
+			}
+
+			durationMetric := &metric.DurationMetric{
+				RowMetric: metric.RowMetric{Name: "nitro_splitter_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
+				Duration:  time.Since(started),
+			}
+			s.metric.Send(durationMetric.Metric())
 		}
-
-		if !ok {
-			gaugeMetric.Gauge = 0
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		counterMetric.Counter++
-		gaugeMetric.Gauge = 1
-
-		started := time.Now()
-
-		if err = s.HandleSplitter(req); err != nil {
-			log.WithError(err).Error("error while handling splitter")
-		}
-
-		durationMetric := &metric.DurationMetric{
-			RowMetric: metric.RowMetric{Name: "nitro_splitter_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
-			Duration:  time.Since(started),
-		}
-		s.metric.Send(durationMetric.Metric())
 	}
 }
 
-func (s *splitter) HandleSplitter(req queue.SplitterRequest) error {
+func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest) error {
 	log.WithFields(log.Fields{
 		"app":        "splitter",
 		"uid":        req.UID,
@@ -109,7 +118,7 @@ func (s *splitter) HandleSplitter(req queue.SplitterRequest) error {
 		"chunk_time": req.ChunkTime,
 	}).Info("receive splitter request")
 
-	splittedFiles, err := split(req.UID, s.bucket, req.Input, req.ChunkTime)
+	splittedFiles, err := split(ctx, req.UID, s.bucket, req.Input, req.ChunkTime)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while splitting '%s'", req.UID)
@@ -138,7 +147,7 @@ type result struct {
 	Audio  string
 }
 
-func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime int) (*result, error) {
+func split(ctx context.Context, uid string, bucket storage.Bucket, masterFilePath string, chunkTime int) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "split")
 
 	if err != nil {
@@ -165,7 +174,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 	ffmpeg.Add("-f", "segment")
 	ffmpeg.Add("-segment_time", strconv.Itoa(chunkTime))
 	ffmpeg.Add(workDir + "/chunks/%03d.mp4")
-	err = exec.Run(ffmpeg)
+	err = exec.Run(ctx, ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to split master file with ffmpeg")
@@ -182,6 +191,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 
 		res.Chunks = append(res.Chunks, uid+"/chunks/"+info.Name())
 		return util.Upload(bucket, uid+"/chunks/"+info.Name(), path, storage.PrivateACL)
+		// TODO publish encoder.request here ?
 	})
 
 	if err != nil {
@@ -198,7 +208,7 @@ func split(uid string, bucket storage.Bucket, masterFilePath string, chunkTime i
 	ffmpeg.Add("-ac", "2")
 	ffmpeg.Add("-f", "mp4")
 	ffmpeg.Add(workDir + "/audio.m4a")
-	err = exec.Run(ffmpeg)
+	err = exec.Run(ctx, ffmpeg)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to extract audio from master file with ffmpeg")

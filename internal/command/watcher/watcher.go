@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/signal"
 	"reflect"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
@@ -19,6 +17,7 @@ import (
 	"trancode/internal/database"
 	"trancode/internal/metric"
 	"trancode/internal/queue"
+	"trancode/internal/signal"
 	"trancode/internal/storage"
 )
 
@@ -56,20 +55,7 @@ type watcher struct {
 }
 
 func (w *watcher) Run() {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	go func() {
-		<-sigs // wait for signals
-		delay := 10 * time.Second
-		log.Warnf("signal received, try shutdown gracefully or kill app in %s...", delay)
-		cancel() // send done signal to context
-		timer := time.NewTimer(delay)
-		<-timer.C // wait some time to app shutdown gracefully
-		log.Warnf("app still not shutdown after %s, exit immediately", delay)
-		os.Exit(0) // force to kill app
-	}()
+	ctx := signal.WatchInterrupt(context.Background(), 10*time.Second)
 
 	queueList := []string{
 		"splitter.request",
@@ -84,6 +70,7 @@ func (w *watcher) Run() {
 		"thumbnail.response",
 	}
 
+	// TODO re-CreateQueue om reconnect
 	for _, queueName := range queueList {
 		log.Debugf("create queue '%s'", queueName)
 		_ = w.channel.CreateQueue(queueName)
@@ -94,6 +81,12 @@ func (w *watcher) Run() {
 	totalChunksCache = make(map[string]int)
 
 	log.Info("watcher started")
+
+	// TODO worker pool instead of sync goroutine for each task type
+	// TODO send task info /w callback in chan
+	// TODO start X worker who get work task from chan
+
+	wg := &sync.WaitGroup{}
 
 	wg.Add(1)
 	go w.watch(ctx, wg, "splitter", "splitter.response", &queue.SplitterResponse{}, func(msg interface{}) error {
