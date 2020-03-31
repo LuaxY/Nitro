@@ -118,7 +118,7 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 		"chunk_time": req.ChunkTime,
 	}).Info("receive splitter request")
 
-	splittedFiles, err := split(ctx, req.UID, s.bucket, req.Input, req.ChunkTime)
+	splittedFiles, err := split(ctx, req.UID, s.bucket, s.channel, req.Input, req.ChunkTime, req.Params)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while splitting '%s'", req.UID)
@@ -147,7 +147,7 @@ type result struct {
 	Audio  string
 }
 
-func split(ctx context.Context, uid string, bucket storage.Bucket, masterFilePath string, chunkTime int) (*result, error) {
+func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue.Channel, masterFilePath string, chunkTime int, params []queue.Params) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "split")
 
 	if err != nil {
@@ -189,9 +189,28 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, masterFilePat
 			return nil
 		}
 
-		res.Chunks = append(res.Chunks, uid+"/chunks/"+info.Name())
-		return util.Upload(bucket, uid+"/chunks/"+info.Name(), path, storage.PrivateACL)
-		// TODO publish encoder.request here ?
+		chunk := uid + "/chunks/" + info.Name()
+		res.Chunks = append(res.Chunks, chunk)
+
+		if err = util.Upload(bucket, chunk, path, storage.PrivateACL); err != nil {
+			return err
+		}
+
+		if err := channel.Publish("encoder.request", queue.EncoderRequest{
+			UID:    uid,
+			Chunk:  chunk,
+			Params: params,
+		}); err != nil {
+			return errors.Wrap(err, "unable to publish in encoder.request")
+		}
+
+		log.WithFields(log.Fields{
+			"app":   "splitter",
+			"uid":   uid,
+			"chunk": chunk,
+		}).Info("send encoder request")
+
+		return nil
 	})
 
 	if err != nil {

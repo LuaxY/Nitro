@@ -203,7 +203,7 @@ func (w *watcher) HandleSplitter(req *queue.SplitterResponse) error {
 		return errors.Wrap(err, "unable to consume splitter.response")
 	}
 
-	for _, chunk := range req.Chunks {
+	/*for _, chunk := range req.Chunks {
 		if err := w.channel.Publish("encoder.request", queue.EncoderRequest{
 			UID:    req.UID,
 			Chunk:  chunk,
@@ -217,7 +217,7 @@ func (w *watcher) HandleSplitter(req *queue.SplitterResponse) error {
 			"uid":   req.UID,
 			"chunk": chunk,
 		}).Info("send encoder request")
-	}
+	}*/
 
 	return nil
 }
