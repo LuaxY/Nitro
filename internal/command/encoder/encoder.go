@@ -86,23 +86,32 @@ func (e *encoder) Run() {
 	e.metric.Add(gaugeMetric)
 	e.metric.Add(errorsMetric)
 
-	var last *queue.EncoderRequest
+	var last struct {
+		request  *queue.EncoderRequest
+		delivery queue.Delivery
+	}
 
 loop:
 	for {
 		select {
 		case <-ctx.Done():
 			// Requeue last chunk if shutdown signal is receive
-			if last != nil {
-				if err := e.channel.Publish("encoder.request", last); err != nil {
+			if last.request != nil {
+				if err := last.delivery.Nack(true); err != nil {
 					log.WithError(err).Error("unable to requeue last chunk")
 					break loop
 				}
 
+				// DELETE old method
+				/*if err := e.channel.Publish("encoder.request", last); err != nil {
+					log.WithError(err).Error("unable to requeue last chunk")
+					break loop
+				}*/
+
 				log.WithFields(log.Fields{
 					"app":   "encoder",
-					"uid":   last.UID,
-					"chunk": last.Chunk,
+					"uid":   last.request.UID,
+					"chunk": last.request.Chunk,
 				}).Info("requeue last chunk")
 			}
 			break loop
@@ -122,7 +131,8 @@ loop:
 				continue
 			}
 
-			last = &req
+			last.request = &req
+			last.delivery = msg
 
 			counterMetric.Counter++
 			gaugeMetric.Gauge = 1
@@ -136,9 +146,10 @@ loop:
 				log.WithError(err).Error("error while handling encoder")
 			}
 
-			_ = msg.Ack()
+			last.request = nil
+			last.delivery = nil
 
-			last = nil
+			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"provider": e.provider, "hostname": hostname, "uid": req.UID}},
