@@ -161,7 +161,7 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 			log.Info("stop watching ", taskName)
 			return
 		default:
-			ok, err := w.channel.Consume(queueName, msg)
+			ok, msg, err := w.channel.Consume(queueName, msg)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume ", queueName)
@@ -181,9 +181,12 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 			started := time.Now()
 
 			if err := callback(msg); err != nil {
+				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling ", taskName)
 			}
+
+			_ = msg.Ack()
 
 			uid := "unknown"
 			value := reflect.ValueOf(msg).Elem().FieldByName("UID")

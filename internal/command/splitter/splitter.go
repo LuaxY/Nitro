@@ -86,7 +86,7 @@ loop:
 			break loop
 		default:
 			var req queue.SplitterRequest
-			ok, err := s.channel.Consume("splitter.request", &req)
+			ok, msg, err := s.channel.Consume("splitter.request", &req)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume splitter.request")
@@ -106,9 +106,12 @@ loop:
 			started := time.Now()
 
 			if err = s.HandleSplitter(ctx, req); err != nil {
+				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling splitter")
 			}
+
+			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_splitter_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},

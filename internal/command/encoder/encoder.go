@@ -108,7 +108,7 @@ loop:
 			break loop
 		default:
 			var req queue.EncoderRequest
-			ok, err := e.channel.Consume("encoder.request", &req)
+			ok, msg, err := e.channel.Consume("encoder.request", &req)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume encoder.request")
@@ -131,9 +131,12 @@ loop:
 
 			if err = e.HandleEncoder(ctx, req); err != nil {
 				// TODO how recover work ?
+				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling encoder")
 			}
+
+			_ = msg.Ack()
 
 			last = nil
 

@@ -87,7 +87,7 @@ loop:
 			break loop
 		default:
 			var req queue.MergerRequest
-			ok, err := m.channel.Consume("merger.request", &req)
+			ok, msg, err := m.channel.Consume("merger.request", &req)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume merger.request")
@@ -107,9 +107,12 @@ loop:
 			started := time.Now()
 
 			if err = m.HandleMerger(ctx, req); err != nil {
+				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling merger")
 			}
+
+			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_merger_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},

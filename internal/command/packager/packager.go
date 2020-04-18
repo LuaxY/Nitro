@@ -85,7 +85,7 @@ loop:
 			break loop
 		default:
 			var req queue.PackagerRequest
-			ok, err := p.channel.Consume("packager.request", &req)
+			ok, msg, err := p.channel.Consume("packager.request", &req)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume packager.request")
@@ -105,9 +105,12 @@ loop:
 			started := time.Now()
 
 			if err = p.HandlePackager(ctx, req); err != nil {
+				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling packager")
 			}
+
+			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},

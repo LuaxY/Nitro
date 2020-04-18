@@ -96,24 +96,24 @@ func (r *rabbitmq) CreateQueue(queue string) error {
 	return err
 }
 
-func (r *rabbitmq) Consume(queue string, data interface{}) (k bool, err error) {
-	msg, ok, err := r.ch.Get(queue, true)
+func (r *rabbitmq) Consume(queue string, data interface{}) (k bool, msg Delivery, err error) {
+	message, ok, err := r.ch.Get(queue, false)
 
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	if !ok {
-		return false, nil
+		return false, nil, nil
 	}
 
-	err = yaml.Unmarshal(msg.Body, data)
+	err = yaml.Unmarshal(message.Body, data)
 
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
-	return true, nil
+	return true, &rabbitmqDelivery{msg: message}, nil
 }
 
 func (r *rabbitmq) Publish(queue string, data interface{}) (err error) {
