@@ -95,6 +95,8 @@ func (e *encoder) Run() {
 		delivery queue.Delivery
 	}
 
+	noMessageCounter := 0
+
 loop:
 	for {
 		select {
@@ -123,6 +125,11 @@ loop:
 
 			break loop
 		default:
+			if noMessageCounter >= 3 {
+				log.Infof("no messages after %d retry, shutdown", noMessageCounter)
+				break loop
+			}
+
 			var req queue.EncoderRequest
 			ok, msg, err := e.channel.Consume("encoder.request", &req)
 
@@ -133,10 +140,13 @@ loop:
 			}
 
 			if !ok {
+				noMessageCounter++
 				gaugeMetric.Gauge = 0
 				time.Sleep(5 * time.Second)
 				continue
 			}
+
+			noMessageCounter = 0
 
 			last.request = &req
 			last.delivery = msg
