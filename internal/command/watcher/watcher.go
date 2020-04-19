@@ -126,10 +126,10 @@ func (w *watcher) Run() {
 	})
 
 	wg.Wait()
-	log.Info("watcher ended")
+	log.Info("watcher stopped")
 }
 
-func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string, queueName string, msg interface{}, callback func(msg interface{}) error) {
+func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string, queueName string, response interface{}, callback func(msg interface{}) error) {
 	defer wg.Done()
 
 	log.Info("start watching ", taskName)
@@ -155,13 +155,14 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 	w.metric.Add(gaugeMetric)
 	w.metric.Add(errorsMetric)
 
+loop:
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("stop watching ", taskName)
-			return
+			break loop
 		default:
-			ok, msg, err := w.channel.Consume(queueName, msg)
+			ok, msg, err := w.channel.Consume(queueName, response)
 
 			if err != nil {
 				log.WithError(err).Error("unable to consume ", queueName)
@@ -180,13 +181,13 @@ func (w *watcher) watch(ctx context.Context, wg *sync.WaitGroup, taskName string
 
 			started := time.Now()
 
-			if err := callback(msg); err != nil {
+			if err := callback(response); err != nil {
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling ", taskName)
+			} else {
+				_ = msg.Ack()
 			}
-
-			_ = msg.Ack()
 
 			uid := "unknown"
 			value := reflect.ValueOf(msg).Elem().FieldByName("UID")

@@ -110,9 +110,9 @@ loop:
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling merger")
+			} else {
+				_ = msg.Ack()
 			}
-
-			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_merger_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
@@ -121,6 +121,8 @@ loop:
 			m.metric.Send(durationMetric.Metric())
 		}
 	}
+
+	log.Info("merger stopped")
 }
 
 func (m *merger) HandleMerger(ctx context.Context, req queue.MergerRequest) error {

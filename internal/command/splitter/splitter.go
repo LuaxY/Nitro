@@ -109,9 +109,9 @@ loop:
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling splitter")
+			} else {
+				_ = msg.Ack()
 			}
-
-			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_splitter_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
@@ -120,6 +120,8 @@ loop:
 			s.metric.Send(durationMetric.Metric())
 		}
 	}
+
+	log.Info("splitter stopped")
 }
 
 func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest) error {

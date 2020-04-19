@@ -29,6 +29,10 @@ func init() {
 
 	cmd.PersistentFlags().String("provider", "unknown", "Cloud provider")
 	cmd.PersistentFlags().Bool("cuda", false, "Enable CUDA")
+
+	if err := viper.BindPFlags(cmd.PersistentFlags()); err != nil {
+		log.WithError(err).Fatal("flag biding failed")
+	}
 }
 
 var cmd = &cobra.Command{
@@ -114,6 +118,9 @@ loop:
 					"chunk": last.request.Chunk,
 				}).Info("requeue last chunk")
 			}
+
+			// TODO metrics encoder uptime
+
 			break loop
 		default:
 			var req queue.EncoderRequest
@@ -144,12 +151,12 @@ loop:
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling encoder")
+			} else {
+				_ = msg.Ack()
 			}
 
 			last.request = nil
 			last.delivery = nil
-
-			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"provider": e.provider, "hostname": hostname, "uid": req.UID}},
@@ -159,7 +166,7 @@ loop:
 		}
 	}
 
-	log.Info("watcher ended")
+	log.Info("encoder stopped")
 }
 
 type result struct {

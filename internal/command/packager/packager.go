@@ -108,9 +108,9 @@ loop:
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
 				log.WithError(err).Error("error while handling packager")
+			} else {
+				_ = msg.Ack()
 			}
-
-			_ = msg.Ack()
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_packager_tasks_duration", Tags: metric.Tags{"hostname": hostname, "uid": req.UID}},
@@ -119,6 +119,8 @@ loop:
 			p.metric.Send(durationMetric.Metric())
 		}
 	}
+
+	log.Info("packager stopped")
 }
 
 func (p *packager) HandlePackager(ctx context.Context, req queue.PackagerRequest) error {
