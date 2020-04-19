@@ -51,7 +51,11 @@ func init() {
 	Cmd.PersistentFlags().String("aws-id", "", "AWS id")
 	Cmd.PersistentFlags().String("aws-secret", "", "AWS secret")
 
-	Cmd.PersistentFlags().String("amqp", "amqp://guest:guest@rabbitmq:5672/", "RabbitMQ AMQP URL")
+	Cmd.PersistentFlags().String("rabbitmq-protocol", "amqp", "RabbitMQ host")
+	Cmd.PersistentFlags().String("rabbitmq-host", "rabbitmq", "RabbitMQ host")
+	Cmd.PersistentFlags().Int("rabbitmq-port", 5672, "RabbitMQ port")
+	Cmd.PersistentFlags().String("rabbitmq-user", "guest", "RabbitMQ username")
+	Cmd.PersistentFlags().String("rabbitmq-pass", "guest", "RabbitMQ password")
 
 	Cmd.PersistentFlags().String("redis", "redis:6379", "Redis endpoint")
 	Cmd.PersistentFlags().String("redis-password", "", "Redis password")
@@ -95,14 +99,21 @@ func GetComponent(loadDB, loadQueue, loadStorage, loadeMetric bool) *Component {
 	}
 
 	if loadQueue {
-		amqp := viper.GetString("amqp")
+		rabbitMQProtocol := viper.GetString("rabbitmq-protocol")
+		rabbitMQHost := viper.GetString("rabbitmq-host")
+		rabbitMQPort := viper.GetInt("rabbitmq-port")
+		rabbitMQUser := viper.GetString("rabbitmq-user")
+		rabbitMQPass := viper.GetString("rabbitmq-pass")
+
+		amqp := fmt.Sprintf("%s://%s:%s@%s:%d/", rabbitMQProtocol, rabbitMQUser, rabbitMQPass, rabbitMQHost, rabbitMQPort)
+
 		channel, err := queue.NewRabbitMQ(context.Background(), amqp)
 
 		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to queue '%s'", amqp)
+			log.WithError(err).Fatalf("unable to connect to queue '%s'", strings.Replace(amqp, rabbitMQPass, "*******", -1))
 		}
 
-		log.Infof("connected to queue '%s'", amqp)
+		log.Infof("connected to queue '%s'", strings.Replace(amqp, rabbitMQPass, "*******", -1))
 		component.Channel = channel
 	}
 

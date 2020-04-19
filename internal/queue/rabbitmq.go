@@ -40,7 +40,6 @@ func (r *rabbitmq) connect() {
 			continue
 		}
 
-		log.Debugf("connected to rabbitmq: %s", r.url)
 		r.connClosed = make(chan *amqp.Error)
 		r.conn.NotifyClose(r.connClosed)
 		r.openChanel()
@@ -60,7 +59,6 @@ func (r *rabbitmq) openChanel() {
 			continue
 		}
 
-		log.Debug("rabbitmq channel open")
 		r.chClosed = make(chan *amqp.Error)
 		r.ch.NotifyClose(r.chClosed)
 

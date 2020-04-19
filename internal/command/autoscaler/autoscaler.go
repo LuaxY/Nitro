@@ -2,6 +2,7 @@ package autoscaler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	rabbithole "github.com/michaelklishin/rabbit-hole/v2"
@@ -18,6 +19,8 @@ import (
 func init() {
 	root.Cmd.AddCommand(cmd)
 
+	cmd.PersistentFlags().Int("max-instances", 5, "Maximum number of instances")
+
 	cmd.PersistentFlags().String("gcp-project", "", "GCP project")
 	cmd.PersistentFlags().String("gcp-zone", "us-central1-a", "GCP zone")
 	cmd.PersistentFlags().String("gcp-group", "nitro-encoders", "GCP group")
@@ -25,10 +28,6 @@ func init() {
 	cmd.PersistentFlags().String("gcp-machine-type", "n1-standard-1", "GCP machine type")
 	cmd.PersistentFlags().String("gcp-template", "", "GCP image template")
 	cmd.PersistentFlags().Bool("gcp-preemtible", true, "GCP preemtible instance")
-
-	cmd.PersistentFlags().String("rabbitmq-url", "", "RabbitMQ admin url")
-	cmd.PersistentFlags().String("rabbitmq-user", "admin", "RabbitMQ admin username")
-	cmd.PersistentFlags().String("rabbitmq-pass", "", "RabbitMQ admin password")
 
 	if err := viper.BindPFlags(cmd.PersistentFlags()); err != nil {
 		log.WithError(err).Fatal("flag biding failed")
@@ -56,10 +55,6 @@ type autoscaler struct {
 	metric metric.Client
 }
 
-const (
-	MaxInstance = 5
-)
-
 func (w *autoscaler) Run() {
 	ctx := signal.WatchInterrupt(context.Background(), 10*time.Second)
 
@@ -78,14 +73,20 @@ func (w *autoscaler) Run() {
 		"group":   gcpGroup,
 	}).Info("connected to GCP")
 
-	rabbitMQurl := viper.GetString("rabbitmq-url")
-	rmqc, err := rabbithole.NewClient(rabbitMQurl, viper.GetString("rabbitmq-user"), viper.GetString("rabbitmq-pass"))
+	rabbitMQProtocol := viper.GetString("rabbitmq-protocol")
+	rabbitMQHost := viper.GetString("rabbitmq-host")
+
+	rabbitMQURL := fmt.Sprintf("%s://%s", rabbitMQProtocol, rabbitMQHost)
+	rmqc, err := rabbithole.NewClient(rabbitMQURL, viper.GetString("rabbitmq-user"), viper.GetString("rabbitmq-pass"))
 
 	if err != nil {
 		log.WithError(err).Fatal("rabbitmq admin client")
 	}
 
-	log.Infof("connected to RabbitMQ admin '%s'", rabbitMQurl)
+	log.Infof("connected to RabbitMQ admin '%s'", rabbitMQURL)
+
+	MaxInstance := viper.GetInt("max-instances")
+	log.Infof("maximum number of instances: %d", MaxInstance)
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
