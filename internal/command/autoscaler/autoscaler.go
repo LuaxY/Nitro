@@ -95,7 +95,7 @@ func (w *autoscaler) Run() {
 
 loop:
 	for {
-		go func() {
+		func() {
 			queueInfo, err := rmqc.GetQueue("/", "encoder.request")
 
 			if err != nil {
@@ -126,12 +126,13 @@ loop:
 						nbInstances = queueInfo.MessagesReady
 					}
 
-					if nbInstances != count {
+					if nbInstances > count {
 						for i := 0; i < nbInstances-count; i++ {
 							_, err = provider.AddInstance(ctx, viper.GetString("gcp-prefix"), viper.GetString("gcp-machine-type"), viper.GetString("gcp-template"), viper.GetBool("gcp-preemtible"))
 
 							if err != nil {
-								log.WithError(err).Fatal("increase instance number")
+								log.WithError(err).Error("increase instance number")
+								return
 							}
 						}
 
@@ -144,7 +145,8 @@ loop:
 			} else if queueInfo.Messages == 0 {
 				if count > 0 {
 					if err = provider.DeleteAll(ctx); err != nil {
-						log.WithError(err).Fatal("delete all instances")
+						log.WithError(err).Error("delete all instances")
+						return
 					}
 
 					log.WithFields(log.Fields{
