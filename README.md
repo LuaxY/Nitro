@@ -56,6 +56,8 @@ Publish request in `splitter.request` queue
 uid: example
 input: inputs/mux-video-intro.mp4
 chunkTime: 5
+videoMap: 0
+audioMap: 1
 params:
   - profile: high
     codec: h264

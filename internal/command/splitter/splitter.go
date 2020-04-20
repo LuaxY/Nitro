@@ -130,9 +130,11 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 		"uid":        req.UID,
 		"input":      req.Input,
 		"chunk_time": req.ChunkTime,
+		"video_map":  req.VideoMap,
+		"audio_map":  req.AudioMap,
 	}).Info("receive splitter request")
 
-	splittedFiles, err := split(ctx, req.UID, s.bucket, s.channel, req.Input, req.ChunkTime, req.Params)
+	splittedFiles, err := split(ctx, req.UID, s.bucket, s.channel, req.Input, req.ChunkTime, req.VideoMap, req.AudioMap, req.Params)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while splitting '%s'", req.UID)
@@ -161,7 +163,7 @@ type result struct {
 	Audio  string
 }
 
-func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue.Channel, masterFilePath string, chunkTime int, params []queue.Params) (*result, error) {
+func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue.Channel, masterFilePath string, chunkTime, videoMap, audioMap int, params []queue.Params) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "split")
 
 	if err != nil {
@@ -183,7 +185,7 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 	ffmpeg := &executor.Cmd{Binary: "ffmpeg"}
 	ffmpeg.Add("-i", workDir+"/master.mp4")
 	ffmpeg.Add("-hide_banner", "-y", "-dn", "-map_metadata", "-1", "-map_chapters", "-1")
-	ffmpeg.Add("-map", "0:0") // TODO map
+	ffmpeg.Add("-map", "0:"+strconv.Itoa(videoMap))
 	ffmpeg.Add("-c:v", "copy")
 	ffmpeg.Add("-f", "segment")
 	ffmpeg.Add("-segment_time", strconv.Itoa(chunkTime))
@@ -236,9 +238,10 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 	ffmpeg = &executor.Cmd{Binary: "ffmpeg"}
 	ffmpeg.Add("-i", workDir+"/master.mp4")
 	ffmpeg.Add("-hide_banner", "-y", "-dn", "-map_metadata", "-1", "-map_chapters", "-1")
-	ffmpeg.Add("-map", "0:1") // TODO map
+	ffmpeg.Add("-map", "0:"+strconv.Itoa(audioMap)) // TODO multiple audio ?
 	ffmpeg.Add("-c:a", "aac")
 	ffmpeg.Add("-ac", "2")
+	// TODO audio bitrate
 	ffmpeg.Add("-f", "mp4")
 	ffmpeg.Add(workDir + "/audio.m4a")
 	err = exec.Run(ctx, ffmpeg)
