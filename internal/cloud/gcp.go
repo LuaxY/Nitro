@@ -8,6 +8,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/api/logging/v2"
 	"google.golang.org/api/option"
 
 	"nitro/internal/util"
@@ -118,6 +119,7 @@ func (g *gcp) AddInstance(ctx context.Context, namePrefix string, machineType st
 				Scopes: []string{
 					compute.ComputeScope,
 					compute.DevstorageReadOnlyScope,
+					logging.LoggingWriteScope,
 				},
 			},
 		},

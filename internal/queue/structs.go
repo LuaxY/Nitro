@@ -4,6 +4,8 @@ type SplitterRequest struct {
 	UID       string   `yaml:"uid"`
 	Input     string   `yaml:"input"`
 	ChunkTime int      `yaml:"chunkTime"`
+	VideoMap  int      `yaml:"videoMap"`
+	AudioMap  int      `yaml:"audioMap"`
 	Params    []Params `yaml:"params"`
 }
 
