@@ -9,12 +9,12 @@ import (
 
 type Client interface {
 	Add(metric Metric)
-	Send(metrics ...influxdb.Metric)
+	Send(metrics ...*influxdb2.Point)
 	Ticker(ctx context.Context, duration time.Duration)
 }
 
 type Metric interface {
-	Metric() influxdb.Metric
+	Metric() *influxdb2.Point
 }
 
 type RowMetric struct {
@@ -24,8 +24,8 @@ type RowMetric struct {
 	Time   time.Time
 }
 
-func (rm *RowMetric) Metric() influxdb.Metric {
-	return influxdb.NewRowMetric(rm.Fields, rm.Name, rm.Tags, rm.Time)
+func (rm *RowMetric) Metric() *influxdb2.Point {
+	return influxdb2.NewPoint(rm.Name, rm.Tags, rm.Fields, rm.Time)
 }
 
 type CounterMetric struct {
@@ -38,8 +38,8 @@ func (cm *CounterMetric) Inc() {
 	cm.Time = time.Now()
 }
 
-func (cm *CounterMetric) Metric() influxdb.Metric {
-	return influxdb.NewRowMetric(Fields{"counter": cm.Counter}, cm.Name, cm.Tags, cm.Time)
+func (cm *CounterMetric) Metric() *influxdb2.Point {
+	return influxdb2.NewPoint(cm.Name, cm.Tags, Fields{"counter": cm.Counter}, cm.Time)
 }
 
 type GaugeMetric struct {
@@ -52,8 +52,8 @@ func (gm *GaugeMetric) Set(gauge int) {
 	gm.Time = time.Now()
 }
 
-func (gm *GaugeMetric) Metric() influxdb.Metric {
-	return influxdb.NewRowMetric(Fields{"gauge": gm.Gauge}, gm.Name, gm.Tags, gm.Time)
+func (gm *GaugeMetric) Metric() *influxdb2.Point {
+	return influxdb2.NewPoint(gm.Name, gm.Tags, Fields{"gauge": gm.Gauge}, gm.Time)
 }
 
 type DurationMetric struct {
@@ -66,6 +66,6 @@ func (dm *DurationMetric) Set(duration time.Duration) {
 	dm.Time = time.Now()
 }
 
-func (dm *DurationMetric) Metric() influxdb.Metric {
-	return influxdb.NewRowMetric(Fields{"duration": dm.Duration.Milliseconds()}, dm.Name, dm.Tags, dm.Time)
+func (dm *DurationMetric) Metric() *influxdb2.Point {
+	return influxdb2.NewPoint(dm.Name, dm.Tags, Fields{"duration": dm.Duration.Milliseconds()}, dm.Time)
 }
