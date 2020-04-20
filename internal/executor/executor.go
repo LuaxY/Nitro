@@ -58,3 +58,7 @@ func (c *Cmd) Add(args ...string) {
 func (c *Cmd) Env(env string) {
 	c.envs = append(c.envs, env)
 }
+
+func (c *Cmd) Command() []string {
+	return c.args
+}

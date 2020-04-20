@@ -1,13 +1,13 @@
 package encoder
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -21,7 +21,15 @@ import (
 	"nitro/internal/queue"
 	"nitro/internal/signal"
 	"nitro/internal/storage"
+	"nitro/internal/transcode"
 	"nitro/internal/util"
+)
+
+var (
+	logger = log.WithFields(log.Fields{
+		"app":     "encoder",
+		"version": "dev",
+	})
 )
 
 func init() {
@@ -31,7 +39,7 @@ func init() {
 	cmd.PersistentFlags().Bool("cuda", false, "Enable CUDA")
 
 	if err := viper.BindPFlags(cmd.PersistentFlags()); err != nil {
-		log.WithError(err).Fatal("flag biding failed")
+		logger.WithError(err).Fatal("flag biding failed")
 	}
 }
 
@@ -40,7 +48,7 @@ var cmd = &cobra.Command{
 	Short: "Encode video chunks",
 	Long:  `Nitro Encoder: encode requested video chunk in different qualities`,
 	Run: func(cmd *cobra.Command, args []string) {
-		log.Info("starting encoder")
+		logger.Info("starting encoder")
 
 		cmpt := root.GetComponent(false, true, true, true)
 
@@ -65,7 +73,7 @@ type encoder struct {
 func (e *encoder) Run() {
 	ctx := signal.WatchInterrupt(context.Background(), 25*time.Second)
 
-	log.Info("encoder started")
+	logger.Info("encoder started")
 
 	go e.metric.Ticker(context.Background(), 1*time.Second)
 
@@ -95,6 +103,7 @@ func (e *encoder) Run() {
 		delivery queue.Delivery
 	}
 
+	encoderStarted := time.Now()
 	noMessageCounter := 0
 
 loop:
@@ -104,29 +113,20 @@ loop:
 			// Requeue last chunk if shutdown signal is receive
 			if last.request != nil {
 				if err := last.delivery.Nack(true); err != nil {
-					log.WithError(err).Error("unable to requeue last chunk")
+					logger.WithError(err).Error("unable to requeue last chunk")
 					break loop
 				}
 
-				// DELETE old method
-				/*if err := e.channel.Publish("encoder.request", last); err != nil {
-					log.WithError(err).Error("unable to requeue last chunk")
-					break loop
-				}*/
-
-				log.WithFields(log.Fields{
-					"app":   "encoder",
+				logger.WithFields(log.Fields{
 					"uid":   last.request.UID,
 					"chunk": last.request.Chunk,
-				}).Info("requeue last chunk")
+				}).Info("requeue last chunk (#1)")
 			}
-
-			// TODO metrics encoder uptime
 
 			break loop
 		default:
 			if noMessageCounter >= 3 {
-				log.Infof("no messages after %d retry, shutdown", noMessageCounter)
+				logger.Infof("no messages after %d retry, shutdown", noMessageCounter)
 				break loop
 			}
 
@@ -134,7 +134,7 @@ loop:
 			ok, msg, err := e.channel.Consume("encoder.request", &req)
 
 			if err != nil {
-				log.WithError(err).Error("unable to consume encoder.request")
+				logger.WithError(err).Error("unable to consume encoder.request")
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -154,29 +154,48 @@ loop:
 			counterMetric.Counter++
 			gaugeMetric.Gauge = 1
 
-			started := time.Now()
+			taskStarted := time.Now()
 
 			if err = e.HandleEncoder(ctx, req); err != nil {
-				// TODO how recover work ?
+				if strings.Contains(err.Error(), "signal: killed") {
+					if err := last.delivery.Nack(true); err != nil {
+						logger.WithError(err).Error("unable to requeue last chunk")
+						break loop
+					}
+
+					logger.WithFields(log.Fields{
+						"uid":   req.UID,
+						"chunk": req.Chunk,
+					}).Info("requeue last chunk (#2)")
+					break loop
+				}
+
 				_ = msg.Nack(false)
 				errorsMetric.Counter++
-				log.WithError(err).Error("error while handling encoder")
-			} else {
-				_ = msg.Ack()
+				logger.WithError(err).Error("error while handling encoder")
+				continue
 			}
+
+			_ = msg.Ack()
 
 			last.request = nil
 			last.delivery = nil
 
 			durationMetric := &metric.DurationMetric{
 				RowMetric: metric.RowMetric{Name: "nitro_encoder_tasks_duration", Tags: metric.Tags{"provider": e.provider, "hostname": hostname, "uid": req.UID}},
-				Duration:  time.Since(started),
+				Duration:  time.Since(taskStarted),
 			}
 			e.metric.Send(durationMetric.Metric())
 		}
 	}
 
-	log.Info("encoder stopped")
+	logger.Info("encoder stopped")
+
+	durationMetric := &metric.DurationMetric{
+		RowMetric: metric.RowMetric{Name: "nitro_encoder_duration", Tags: metric.Tags{"provider": e.provider, "hostname": hostname}},
+		Duration:  time.Since(encoderStarted),
+	}
+	e.metric.Send(durationMetric.Metric())
 }
 
 type result struct {
@@ -185,8 +204,7 @@ type result struct {
 }
 
 func (e *encoder) HandleEncoder(ctx context.Context, req queue.EncoderRequest) error {
-	log.WithFields(log.Fields{
-		"app":   "encoder",
+	logger.WithFields(log.Fields{
 		"uid":   req.UID,
 		"chunk": req.Chunk,
 	}).Info("receive encoder request")
@@ -205,8 +223,7 @@ func (e *encoder) HandleEncoder(ctx context.Context, req queue.EncoderRequest) e
 		return errors.Wrap(err, "unable to publish in encoder.response")
 	}
 
-	log.WithFields(log.Fields{
-		"app":       "encoder",
+	logger.WithFields(log.Fields{
 		"uid":       req.UID,
 		"qualities": encodedFile.Qualities,
 	}).Info("send encoder response")
@@ -239,12 +256,8 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 
 	list := make(map[int]string)
 
-	exec := executor.NewExecutor(&bytes.Buffer{})
-	ffmpeg := &executor.Cmd{Binary: "ffmpeg"}
-
-	ffmpeg.Add("-i", workDir+"/"+fileName)
+	ffmpeg := &executor.Cmd{}
 	ffmpeg.Add("-hide_banner")
-	ffmpeg.Add("-y")
 
 	for _, params := range p {
 		ffmpeg.Add("-dn") // no data
@@ -294,17 +307,36 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 		list[params.Height] = encodedFilePath
 	}
 
-	err = exec.Run(ctx, ffmpeg)
+	trans := new(transcode.Transcoder)
+	err = trans.Initialize(workDir+"/"+fileName, ffmpeg.Command())
 
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to encode chunk with ffmpeg")
+		return nil, errors.Wrap(err, "transcoder initialization")
+	}
+
+	done := trans.Run(true)
+	progress := trans.Output()
+
+	for msg := range progress {
+		logger.WithFields(log.Fields{
+			"current":  msg.CurrentDuration,
+			"duration": msg.CompleteDuration,
+			"progress": fmt.Sprintf("%05.2f%%", msg.Progress),
+			"speed":    msg.Speed,
+		}).Debug(msg.CurrentTime)
+	}
+
+	err = <-done
+
+	if err != nil {
+		return nil, errors.Wrap(err, "transcoding chunk")
 	}
 
 	for quality, encodedFilePath := range list {
 		filePath := fmt.Sprintf("%s/encoded/%d/%03d.mp4", uid, quality, id)
 
 		if err = util.Upload(bucket, filePath, encodedFilePath, storage.PrivateACL); err != nil {
-			return nil, errors.Wrap(err, "unable to store encoded chunk file")
+			return nil, errors.Wrap(err, "encoded chunk storage")
 		}
 
 		res.Qualities[quality] = filePath
