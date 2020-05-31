@@ -4,8 +4,6 @@ type SplitterRequest struct {
 	UID       string   `yaml:"uid"`
 	Input     string   `yaml:"input"`
 	ChunkTime int      `yaml:"chunkTime"`
-	VideoMap  int      `yaml:"videoMap"`
-	AudioMap  int      `yaml:"audioMap"`
 	Params    []Params `yaml:"params"`
 }
 
@@ -13,6 +11,7 @@ type SplitterResponse struct {
 	UID         string   `yaml:"uid"`
 	TotalChunks int      `yaml:"totalChunks"`
 	Chunks      []string `yaml:"chunks"`
+	Langs       []string `yaml:"langs"`
 	Params      []Params `yaml:"params"`
 }
 
@@ -39,8 +38,9 @@ type MergerResponse struct {
 }
 
 type PackagerRequest struct {
-	UID       string `yaml:"uid"`
-	Qualities []int  `yaml:"qualities"`
+	UID       string   `yaml:"uid"`
+	Qualities []int    `yaml:"qualities"`
+	Langs     []string `yaml:"langs"`
 }
 
 type PackagerResponse struct {
@@ -49,6 +49,7 @@ type PackagerResponse struct {
 }
 
 type Params struct {
+	Type      string   `yaml:"type,omitempty"`
 	Map       int      `yaml:"map,omitempty"`
 	Profile   string   `yaml:"profile,omitempty"`
 	Codec     string   `yaml:"codec,omitempty"`
@@ -60,5 +61,7 @@ type Params struct {
 	MinRate   string   `yaml:"minrate,omitempty"`
 	BufSize   string   `yaml:"bufsize,omitempty"`
 	Preset    string   `yaml:"preset,omitempty"`
+	Channel   int      `yaml:"channel,omitempty"`
+	Lang      string   `yaml:"lang,omitempty"`
 	ExtraArgs []string `yaml:"extraArgs,omitempty"`
 }

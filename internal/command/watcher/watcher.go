@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,16 +206,28 @@ loop:
 	}
 }
 
+// TODO remove or improve
+var start time.Time
+
 func (w *watcher) HandleSplitter(req *queue.SplitterResponse) error {
 	log.WithFields(log.Fields{
 		"watch":        "splitter",
 		"uid":          req.UID,
 		"total_chunks": len(req.Chunks),
+		"langs":        req.Langs,
 	}).Info("receive splitter response")
 
 	if err := w.db.Set(req.UID+".total", strconv.Itoa(req.TotalChunks), 24*time.Hour); err != nil {
-		return errors.Wrap(err, "unable to consume splitter.response")
+		return errors.Wrap(err, "store total chunks")
 	}
+
+	if err := w.db.Set(req.UID+".langs", strings.Join(req.Langs, ","), 24*time.Hour); err != nil {
+		return errors.Wrap(err, "store lang list")
+	}
+
+	// TODO remove
+	start = time.Now()
+	log.Debug("STARTED ", req.UID, " ", start)
 
 	/*for _, chunk := range req.Chunks {
 		if err := w.channel.Publish("encoder.request", queue.EncoderRequest{
@@ -248,6 +261,7 @@ func (w *watcher) HandleEncoder(req *queue.EncoderResponse) error {
 		totalString, err := w.db.Get(req.UID + ".total")
 
 		if err != nil {
+			// FIXME error trigger if at least one encoder finish before splitter
 			return errors.Wrapf(err, "unable to get total chunks for '%s'", req.UID)
 		}
 
@@ -303,9 +317,16 @@ func (w *watcher) HandleMerger(req *queue.MergerResponse) error {
 		"qualities": req.Qualities,
 	}).Info("receive merger response")
 
+	langs, err := w.db.Get(req.UID + ".langs")
+
+	if err != nil {
+		return errors.Wrapf(err, "unable to get langs for '%s'", req.UID)
+	}
+
 	if err := w.channel.Publish("packager.request", queue.PackagerRequest{
 		UID:       req.UID,
 		Qualities: req.Qualities,
+		Langs:     strings.Split(langs, ","),
 	}); err != nil {
 		return errors.Wrap(err, "unable to publish in packager.request")
 	}
@@ -325,8 +346,10 @@ func (w *watcher) HandlePackager(req *queue.PackagerResponse) error {
 		"uid":   req.UID,
 	}).Info("receive packager response")
 
-	_ = w.bucket.Delete(req.UID + "/chunks")
-	_ = w.bucket.Delete(req.UID + "/encoded")
+	log.Debug("FINISHED ", req.UID, " ", time.Now(), " ", time.Since(start)) // TODO remove
+
+	_ = w.bucket.Delete(context.Background(), req.UID+"/chunks")
+	_ = w.bucket.Delete(context.Background(), req.UID+"/encoded")
 
 	_ = w.db.Delete(req.UID)
 	_ = w.db.Delete(req.UID + ".total")

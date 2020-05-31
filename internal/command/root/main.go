@@ -6,12 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/go-redis/redis/v7"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gocloud.dev/gcp"
 
 	"nitro/internal/database"
 	"nitro/internal/metric"
@@ -32,7 +31,9 @@ func Execute() {
 	if viper.GetBool("json-log") {
 		log.SetFormatter(&log.JSONFormatter{})
 	}
+
 	log.SetLevel(log.DebugLevel)
+	log.SetOutput(os.Stdout)
 
 	if err := Cmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -50,6 +51,8 @@ func init() {
 	Cmd.PersistentFlags().String("aws-endpoint", "", "AWS endpoint")
 	Cmd.PersistentFlags().String("aws-id", "", "AWS id")
 	Cmd.PersistentFlags().String("aws-secret", "", "AWS secret")
+
+	Cmd.PersistentFlags().String("gcs-bucket", "", "GCS bucket")
 
 	Cmd.PersistentFlags().String("rabbitmq-protocol", "amqp", "RabbitMQ host")
 	Cmd.PersistentFlags().String("rabbitmq-host", "rabbitmq", "RabbitMQ host")
@@ -80,7 +83,7 @@ type Component struct {
 	Metric  metric.Client
 }
 
-func GetComponent(loadDB, loadQueue, loadStorage, loadeMetric bool) *Component {
+func GetComponent(loadDB, loadQueue, loadStorage, loadMetric bool) *Component {
 	component := &Component{}
 
 	if loadDB {
@@ -121,12 +124,27 @@ func GetComponent(loadDB, loadQueue, loadStorage, loadeMetric bool) *Component {
 		//bucketName := viper.GetString("storage")
 		//bucket, err := storage.NewLocal(context.Background(), bucketName)
 
-		bucketName := viper.GetString("aws-bucket")
+		/*bucketName := viper.GetString("aws-bucket")
 		bucket, err := storage.NewS3(context.Background(), bucketName, &aws.Config{
 			Endpoint:    aws.String(viper.GetString("aws-endpoint")),
 			Region:      aws.String(viper.GetString("aws-region")),
 			Credentials: credentials.NewStaticCredentials(viper.GetString("aws-id"), viper.GetString("aws-secret"), ""),
-		})
+		})*/
+
+		creds, err := gcp.DefaultCredentials(context.Background())
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to find default GCS credentials")
+		}
+
+		client, err := gcp.NewHTTPClient(gcp.DefaultTransport(), gcp.CredentialsTokenSource(creds))
+
+		if err != nil {
+			log.WithError(err).Fatalf("unable to create GCS HTTP client")
+		}
+
+		bucketName := viper.GetString("gcs-bucket")
+		bucket, err := storage.NewGCS(context.Background(), bucketName, client)
 
 		if err != nil {
 			log.WithError(err).Fatalf("unable to connect to storage '%s'", bucketName)
@@ -136,20 +154,23 @@ func GetComponent(loadDB, loadQueue, loadStorage, loadeMetric bool) *Component {
 		component.Bucket = bucket
 	}
 
-	if loadeMetric {
-		influxDbAddr := viper.GetString("influxdb")
+	if loadMetric {
+		/*metricEndpoint := viper.GetString("influxdb")
 		metricClient, err := metric.NewInfluxdb(metric.InfluxdbConfig{
-			Addr:   influxDbAddr,
+			Addr:   metricEndpoint,
 			Token:  viper.GetString("influxdb-token"),
 			Bucket: viper.GetString("influxdb-bucket"),
 			Org:    viper.GetString("influxdb-org"),
 		})
 
 		if err != nil {
-			log.WithError(err).Fatalf("unable to connect to metrics '%s'", influxDbAddr)
-		}
+			log.WithError(err).Fatalf("unable to connect to metrics '%s'", metricEndpoint)
+		}*/
 
-		log.Infof("connected to metrics '%s'", influxDbAddr)
+		metricEndpoint := "null"
+		metricClient := &metric.Null{}
+
+		log.Infof("connected to metrics '%s'", metricEndpoint)
 		component.Metric = metricClient
 	}
 

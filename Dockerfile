@@ -8,6 +8,7 @@ FROM google/shaka-packager AS packager
 RUN packager -version
 
 FROM alpine AS final
+RUN ulimit -l
 RUN apk add --no-cache ffmpeg wget
 WORKDIR /
 COPY --from=builder /nitro/nitro nitro

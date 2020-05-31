@@ -10,6 +10,7 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/logging/v2"
 	"google.golang.org/api/option"
+	"gopkg.in/yaml.v2"
 
 	"nitro/internal/util"
 )
@@ -85,9 +86,74 @@ func (g *gcp) Instances(ctx context.Context) ([]*Instance, error) {
 	return instances, nil
 }
 
+type ContainerDeclaration struct {
+	Spec Spec `yaml:"spec"`
+}
+
+type Spec struct {
+	Containers    []Container `yaml:"containers"`
+	RestartPolicy string      `yaml:"restartPolicy"`
+}
+
+type Container struct {
+	Name  string   `yaml:"name"`
+	Image string   `yaml:"image"`
+	Args  []string `yaml:"args"`
+	Env   []Env    `yaml:"env"`
+	Stdin bool     `yaml:"stdin"`
+	TTY   bool     `yaml:"tty"`
+}
+
+type Env struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+var logDriver = `#cloud-config
+
+write_files:
+  - path: /etc/docker/daemon.json
+    content: '{"log-driver":"gcplogs"}'
+
+runcmd:
+  - systemctl start stackdriver-logging
+  - systemctl restart docker`
+
 func (g *gcp) AddInstance(ctx context.Context, namePrefix string, machineType string, image string, preemptible bool) (string, error) {
-	prefix := "https://www.googleapis.com/compute/v1/projects/" + g.project
+	//prefix := "https://www.googleapis.com/compute/v1/projects/" + g.project
+	prefix := "projects/" + g.project
 	instanceName := namePrefix + util.Random(4)
+
+	container := ContainerDeclaration{
+		Spec: Spec{
+			Containers: []Container{
+				{
+					Name:  instanceName,
+					Image: "gcr.io/spheric-backup-272401/nitro:latest", // TODO var
+					Args: []string{
+						"encoder",
+					},
+					Env: []Env{
+						{Name: "RABBITMQ_PROTOCOL", Value: "amqp"},
+						{Name: "RABBITMQ_HOST", Value: "rabbitmq.nitro.voidmx.net"},
+						{Name: "RABBITMQ_PORT", Value: "5672"},
+						{Name: "RABBITMQ_USER", Value: "admin"},
+						{Name: "RABBITMQ_PASS", Value: "GFLHmtFr7U9SNXhn"},
+						{Name: "GCS_BUCKET", Value: "nitro-encoder"},
+						{Name: "PROVIDER", Value: "google-vm"},
+					},
+					Stdin: false,
+					TTY:   false,
+				},
+			},
+			//RestartPolicy: "Never",
+			RestartPolicy: "Always",
+		},
+	}
+
+	containerYaml, _ := yaml.Marshal(container)
+
+	image = "projects/cos-cloud/global/images/cos-stable-81-12871-119-0" // TODO
 
 	instance := &compute.Instance{
 		Name:        instanceName,
@@ -97,9 +163,12 @@ func (g *gcp) AddInstance(ctx context.Context, namePrefix string, machineType st
 				AutoDelete: true,
 				Boot:       true,
 				Type:       "PERSISTENT",
+				DeviceName: instanceName,
 				InitializeParams: &compute.AttachedDiskInitializeParams{
-					DiskName:    instanceName,
-					SourceImage: prefix + "/global/images/" + image,
+					//DiskName: instanceName,
+					//SourceImage: prefix + "/global/images/" + image, // TODO restore
+					SourceImage: image,
+					DiskSizeGb:  10, // TODO remove ?
 				},
 			},
 		},
@@ -118,20 +187,30 @@ func (g *gcp) AddInstance(ctx context.Context, namePrefix string, machineType st
 				Email: "default",
 				Scopes: []string{
 					compute.ComputeScope,
-					compute.DevstorageReadOnlyScope,
+					compute.DevstorageFullControlScope,
 					logging.LoggingWriteScope,
 				},
 			},
 		},
 		Metadata: &compute.Metadata{
 			Items: []*compute.MetadataItems{
-				{
+				/*{
 					Key:   "startup-script-url",
-					Value: googleapi.String("https://nitro.s3.fr-par.scw.cloud/startup-script.sh"),
+					Value: googleapi.String("gs://nitro-encoder/startup-script.sh"),
+					//Value: googleapi.String("https://nitro.s3.fr-par.scw.cloud/startup-script.sh"),
 				},
 				{
 					Key:   "shutdown-script-url",
-					Value: googleapi.String("https://nitro.s3.fr-par.scw.cloud/shutdown-script.sh"),
+					Value: googleapi.String("gs://nitro-encoder/shutdown-script.sh"),
+					//Value: googleapi.String("https://nitro.s3.fr-par.scw.cloud/shutdown-script.sh"),
+				},*/
+				{
+					Key:   "gce-container-declaration",
+					Value: googleapi.String(string(containerYaml)),
+				},
+				{
+					Key:   "user-data",
+					Value: googleapi.String(logDriver),
 				},
 			},
 		},

@@ -19,7 +19,7 @@ import (
 func init() {
 	root.Cmd.AddCommand(cmd)
 
-	cmd.PersistentFlags().Int("max-instances", 5, "Maximum number of instances")
+	cmd.PersistentFlags().Int("max-instances", 2, "Maximum number of instances")
 
 	cmd.PersistentFlags().String("gcp-project", "", "GCP project")
 	cmd.PersistentFlags().String("gcp-zone", "us-central1-a", "GCP zone")
@@ -27,7 +27,7 @@ func init() {
 	cmd.PersistentFlags().String("gcp-prefix", "nitro-encoder-", "GCP instance name prefix")
 	cmd.PersistentFlags().String("gcp-machine-type", "n1-standard-1", "GCP machine type")
 	cmd.PersistentFlags().String("gcp-template", "", "GCP image template")
-	cmd.PersistentFlags().Bool("gcp-preemtible", true, "GCP preemtible instance")
+	cmd.PersistentFlags().Bool("gcp-preemptible", true, "GCP preemptible instance")
 
 	if err := viper.BindPFlags(cmd.PersistentFlags()); err != nil {
 		log.WithError(err).Fatal("flag biding failed")
@@ -122,13 +122,13 @@ loop:
 				if count < MaxInstance {
 					nbInstances := MaxInstance
 
-					if queueInfo.MessagesReady < MaxInstance {
+					if queueInfo.MessagesReady < MaxInstance { // TODO queueInfo.Messages total ? case 1 instance, 1 ready, 1 unacked (2 total)
 						nbInstances = queueInfo.MessagesReady
 					}
 
 					if nbInstances > count {
 						for i := 0; i < nbInstances-count; i++ {
-							_, err = provider.AddInstance(ctx, viper.GetString("gcp-prefix"), viper.GetString("gcp-machine-type"), viper.GetString("gcp-template"), viper.GetBool("gcp-preemtible"))
+							_, err = provider.AddInstance(ctx, viper.GetString("gcp-prefix"), viper.GetString("gcp-machine-type"), viper.GetString("gcp-template"), viper.GetBool("gcp-preemptible"))
 
 							if err != nil {
 								log.WithError(err).Error("increase instance number")

@@ -53,13 +53,28 @@ Available Commands:
 Publish request in `splitter.request` queue
 
 ```yaml
-uid: example
+uid: demo-7
 input: inputs/mux-video-intro.mp4
 chunkTime: 5
-videoMap: 0
-audioMap: 1
 params:
-  - profile: high
+  - type: video
+    map: 0
+    profile: high
+    codec: h264
+    width: 1920
+    height: 1080
+    crf: 20
+    bitrate: 4800k
+    maxrate: 8400k
+    minrate: 3000k
+    bufsize: 4800k
+    preset: faster
+    extraArgs:
+      - -pix_fmt
+      - yuv420p
+  - type: video
+    map: 0
+    profile: high
     codec: h264
     width: 1280
     height: 720
@@ -72,7 +87,9 @@ params:
     extraArgs:
       - -pix_fmt
       - yuv420p
-  - profile: high
+  - type: video
+    map: 0
+    profile: high
     codec: h264
     width: 960
     height: 540
@@ -85,4 +102,10 @@ params:
     extraArgs:
       - -pix_fmt
       - yuv420p
+  - type: audio
+    map: 1
+    codec: aac
+    channel: 2
+    bitrate: 128k
+    lang: eng
 ```

@@ -4,6 +4,8 @@ go 1.14
 
 require (
 	cloud.google.com/go v0.56.0 // indirect
+	cloud.google.com/go/storage v1.6.0
+	github.com/avast/retry-go v2.6.0+incompatible
 	github.com/aws/aws-sdk-go v1.30.9
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/go-redis/redis/v7 v7.2.0

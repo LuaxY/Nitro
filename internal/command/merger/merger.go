@@ -204,7 +204,7 @@ func merge(ctx context.Context, uid string, bucket storage.Bucket, quality int, 
 		chunk := chunks[k]
 		chunkFilePath := workDir + "/" + path.Base(chunk)
 
-		if err = util.Download(bucket, chunk, chunkFilePath); err != nil {
+		if err = util.Download(ctx, bucket, chunk, chunkFilePath); err != nil {
 			return nil, errors.Wrap(err, "unable to get chunk file")
 		}
 
@@ -236,7 +236,7 @@ func merge(ctx context.Context, uid string, bucket storage.Bucket, quality int, 
 
 	finalPath := fmt.Sprintf("%s/%d.mp4", uid, quality)
 
-	if err = util.Upload(bucket, finalPath, workDir+"/merged.mp4", storage.PrivateACL); err != nil {
+	if err = util.Upload(ctx, bucket, finalPath, workDir+"/merged.mp4", storage.PrivateACL); err != nil {
 		return nil, errors.Wrap(err, "unable to store merged file")
 	}
 

@@ -130,11 +130,9 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 		"uid":        req.UID,
 		"input":      req.Input,
 		"chunk_time": req.ChunkTime,
-		"video_map":  req.VideoMap,
-		"audio_map":  req.AudioMap,
 	}).Info("receive splitter request")
 
-	splittedFiles, err := split(ctx, req.UID, s.bucket, s.channel, req.Input, req.ChunkTime, req.VideoMap, req.AudioMap, req.Params)
+	splittedFiles, err := split(ctx, req.UID, s.bucket, s.channel, req.Input, req.ChunkTime, req.Params)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while splitting '%s'", req.UID)
@@ -144,6 +142,7 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 		UID:         req.UID,
 		TotalChunks: len(splittedFiles.Chunks),
 		Chunks:      splittedFiles.Chunks,
+		Langs:       splittedFiles.Langs,
 		Params:      req.Params,
 	}); err != nil {
 		return errors.Wrap(err, "unable to publish in splitter.response")
@@ -153,6 +152,7 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 		"app":          "splitter",
 		"uid":          req.UID,
 		"total_chunks": len(splittedFiles.Chunks),
+		"langs":        splittedFiles.Langs,
 	}).Info("send splitter response")
 
 	return nil
@@ -160,10 +160,10 @@ func (s *splitter) HandleSplitter(ctx context.Context, req queue.SplitterRequest
 
 type result struct {
 	Chunks []string
-	Audio  string
+	Langs  []string
 }
 
-func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue.Channel, masterFilePath string, chunkTime, videoMap, audioMap int, params []queue.Params) (*result, error) {
+func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue.Channel, masterFilePath string, chunkTime int, params []queue.Params) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "split")
 
 	if err != nil {
@@ -172,7 +172,7 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 
 	defer os.RemoveAll(workDir)
 
-	if err := util.Download(bucket, masterFilePath, workDir+"/master.mp4"); err != nil {
+	if err := util.Download(ctx, bucket, masterFilePath, workDir+"/master.mp4"); err != nil {
 		return nil, errors.Wrap(err, "unable get master file")
 	}
 
@@ -180,6 +180,15 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 	exec := executor.NewExecutor(&bytes.Buffer{})
 
 	// Video
+
+	var videoMap int
+
+	for _, param := range params {
+		if param.Type == "video" {
+			videoMap = param.Map
+			break
+		}
+	}
 
 	_ = os.MkdirAll(workDir+"/chunks", os.ModePerm)
 	ffmpeg := &executor.Cmd{Binary: "ffmpeg"}
@@ -208,7 +217,7 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 		chunk := uid + "/chunks/" + info.Name()
 		res.Chunks = append(res.Chunks, chunk)
 
-		if err = util.Upload(bucket, chunk, path, storage.PrivateACL); err != nil {
+		if err = util.Upload(ctx, bucket, chunk, path, storage.PrivateACL); err != nil {
 			return err
 		}
 
@@ -235,26 +244,32 @@ func split(ctx context.Context, uid string, bucket storage.Bucket, channel queue
 
 	// Audio
 
-	ffmpeg = &executor.Cmd{Binary: "ffmpeg"}
-	ffmpeg.Add("-i", workDir+"/master.mp4")
-	ffmpeg.Add("-hide_banner", "-y", "-dn", "-map_metadata", "-1", "-map_chapters", "-1")
-	ffmpeg.Add("-map", "0:"+strconv.Itoa(audioMap)) // TODO multiple audio ?
-	ffmpeg.Add("-c:a", "aac")
-	ffmpeg.Add("-ac", "2")
-	// TODO audio bitrate
-	ffmpeg.Add("-f", "mp4")
-	ffmpeg.Add(workDir + "/audio.m4a")
-	err = exec.Run(ctx, ffmpeg)
+	for _, param := range params {
+		if param.Type != "audio" {
+			continue
+		}
 
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to extract audio from master file with ffmpeg")
+		ffmpeg = &executor.Cmd{Binary: "ffmpeg"}
+		ffmpeg.Add("-i", workDir+"/master.mp4")
+		ffmpeg.Add("-hide_banner", "-y", "-dn", "-map_metadata", "-1", "-map_chapters", "-1")
+		ffmpeg.Add("-map", "0:"+strconv.Itoa(param.Map))
+		ffmpeg.Add("-c:a", param.Codec)
+		ffmpeg.Add("-ac", strconv.Itoa(param.Channel))
+		ffmpeg.Add("-b:a", param.BitRate)
+		ffmpeg.Add("-f", "mp4")
+		ffmpeg.Add(workDir + "/audio_" + param.Lang + ".m4a")
+		err = exec.Run(ctx, ffmpeg)
+
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to extract audio from master file with ffmpeg")
+		}
+
+		if err = util.Upload(ctx, bucket, uid+"/audio_"+param.Lang+".m4a", workDir+"/audio_"+param.Lang+".m4a", storage.PublicACL); err != nil {
+			return nil, errors.Wrap(err, "unable to store audio file")
+		}
+
+		res.Langs = append(res.Langs, param.Lang)
 	}
-
-	if err = util.Upload(bucket, uid+"/audio.m4a", workDir+"/audio.m4a", storage.PublicACL); err != nil {
-		return nil, errors.Wrap(err, "unable to store audio file")
-	}
-
-	res.Audio = uid + "/audio.m4a"
 
 	return res, nil
 }

@@ -13,7 +13,6 @@ import (
 )
 
 type s3 struct {
-	ctx    context.Context
 	bucket *blob.Bucket
 }
 
@@ -30,15 +29,15 @@ func NewS3(ctx context.Context, bucketName string, config *aws.Config) (Bucket, 
 		return nil, err
 	}
 
-	return &s3{ctx: ctx, bucket: bucket}, nil
+	return &s3{bucket: bucket}, nil
 }
 
-func (s *s3) Get(key string) (data []byte, err error) {
-	return s.bucket.ReadAll(s.ctx, key)
+func (s *s3) Get(ctx context.Context, key string) (data []byte, err error) {
+	return s.bucket.ReadAll(ctx, key)
 }
 
-func (s *s3) Read(key string, output io.Writer) (err error) {
-	reader, err := s.bucket.NewReader(s.ctx, key, nil)
+func (s *s3) Read(ctx context.Context, key string, output io.Writer) (err error) {
+	reader, err := s.bucket.NewReader(ctx, key, nil)
 
 	if err != nil {
 		return err
@@ -50,7 +49,7 @@ func (s *s3) Read(key string, output io.Writer) (err error) {
 	return err
 }
 
-func (s *s3) Store(key string, data []byte, acl ACL) error {
+func (s *s3) Store(ctx context.Context, key string, data []byte, acl ACL) error {
 	before := func(asFunc func(interface{}) bool) error {
 		req := &s3manager.UploadInput{}
 		ok := asFunc(&req)
@@ -61,10 +60,10 @@ func (s *s3) Store(key string, data []byte, acl ACL) error {
 		return nil
 	}
 
-	return s.bucket.WriteAll(s.ctx, key, data, &blob.WriterOptions{BeforeWrite: before})
+	return s.bucket.WriteAll(ctx, key, data, &blob.WriterOptions{BeforeWrite: before})
 }
 
-func (s *s3) Write(key string, input io.Reader, acl ACL) error {
+func (s *s3) Write(ctx context.Context, key string, input io.Reader, acl ACL) error {
 	before := func(asFunc func(interface{}) bool) error {
 		req := &s3manager.UploadInput{}
 		ok := asFunc(&req)
@@ -75,7 +74,7 @@ func (s *s3) Write(key string, input io.Reader, acl ACL) error {
 		return nil
 	}
 
-	writer, err := s.bucket.NewWriter(s.ctx, key, &blob.WriterOptions{BeforeWrite: before})
+	writer, err := s.bucket.NewWriter(ctx, key, &blob.WriterOptions{BeforeWrite: before})
 
 	if err != nil {
 		return err
@@ -87,13 +86,13 @@ func (s *s3) Write(key string, input io.Reader, acl ACL) error {
 	return err
 }
 
-func (s *s3) Delete(key string) error {
+func (s *s3) Delete(ctx context.Context, key string) error {
 	iter := s.bucket.List(&blob.ListOptions{
 		Prefix: key,
 	})
 
 	for {
-		obj, err := iter.Next(s.ctx)
+		obj, err := iter.Next(ctx)
 
 		if err == io.EOF {
 			break
@@ -107,7 +106,7 @@ func (s *s3) Delete(key string) error {
 			continue
 		}
 
-		if err = s.bucket.Delete(s.ctx, obj.Key); err != nil {
+		if err = s.bucket.Delete(ctx, obj.Key); err != nil {
 			return err
 		}
 	}

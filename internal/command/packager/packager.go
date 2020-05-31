@@ -128,9 +128,10 @@ func (p *packager) HandlePackager(ctx context.Context, req queue.PackagerRequest
 		"app":       "packager",
 		"uid":       req.UID,
 		"qualities": req.Qualities,
+		"langs":     req.Langs,
 	}).Info("receive merger request")
 
-	_, err := pack(ctx, req.UID, p.bucket, req.Qualities)
+	_, err := pack(ctx, req.UID, p.bucket, req.Qualities, req.Langs)
 
 	if err != nil {
 		return errors.Wrapf(err, "error while packing '%s'", req.UID)
@@ -154,7 +155,7 @@ type result struct {
 	Path string
 }
 
-func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []int) (*result, error) {
+func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []int, langs []string) (*result, error) {
 	workDir, err := ioutil.TempDir(os.TempDir(), "pack")
 
 	if err != nil {
@@ -163,16 +164,12 @@ func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []in
 
 	defer os.RemoveAll(workDir)
 
-	if err = util.Download(bucket, uid+"/audio.m4a", workDir+"/audio.m4a"); err != nil {
-		return nil, errors.Wrap(err, "unable to get audio file")
-	}
-
 	files := make(map[string]string)
 	exec := executor.NewExecutor(&bytes.Buffer{})
 	shakaPackager := &executor.Cmd{Binary: "packager"}
 
 	for _, quality := range qualities {
-		if err = util.Download(bucket, fmt.Sprintf("%s/%d.mp4", uid, quality), fmt.Sprintf("%s/%d.mp4", workDir, quality)); err != nil {
+		if err = util.Download(ctx, bucket, fmt.Sprintf("%s/%d.mp4", uid, quality), fmt.Sprintf("%s/%d.mp4", workDir, quality)); err != nil {
 			return nil, errors.Wrap(err, "unable to get video file")
 		}
 
@@ -183,7 +180,17 @@ func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []in
 		files[fmt.Sprintf("%s/%d_iframe.m3u8", uid, quality)] = fmt.Sprintf("%s/out/%d_iframe.m3u8", workDir, quality)
 	}
 
-	shakaPackager.Add(fmt.Sprintf("in=%[1]s/audio.m4a,stream=audio,output=%[1]s/out/audio.m4a,playlist_name=%[1]s/out/audio.m3u8,hls_group_id=audio", workDir))
+	for _, lang := range langs {
+		if err = util.Download(ctx, bucket, uid+"/audio_"+lang+".m4a", workDir+"/audio"+lang+".m4a"); err != nil {
+			return nil, errors.Wrap(err, "unable to get audio file")
+		}
+
+		shakaPackager.Add(fmt.Sprintf("in=%[1]s/audio"+lang+".m4a,stream=audio,output=%[1]s/out/audio_"+lang+".m4a,playlist_name=%[1]s/out/audio_"+lang+".m3u8,hls_group_id=audio,hls_name="+lang, workDir))
+
+		files[fmt.Sprintf("%s/audio_%s.m4a", uid, lang)] = fmt.Sprintf("%s/out/audio_%s.m4a", workDir, lang)
+		files[fmt.Sprintf("%s/audio_%s.m3u8", uid, lang)] = fmt.Sprintf("%s/out/audio_%s.m3u8", workDir, lang)
+	}
+
 	shakaPackager.Add("--hls_master_playlist_output", fmt.Sprintf("%s/out/master.m3u8", workDir))
 	shakaPackager.Add("--mpd_output", fmt.Sprintf("%s/out/manifest.mpd", workDir))
 
@@ -191,13 +198,11 @@ func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []in
 		return nil, errors.Wrap(err, "error while executing packager")
 	}
 
-	files[uid+"/audio.m4a"] = workDir + "/out/audio.m4a"
-	files[uid+"/audio.m3u8"] = workDir + "/out/audio.m3u8"
 	files[uid+"/master.m3u8"] = workDir + "/out/master.m3u8"
 	files[uid+"/manifest.mpd"] = workDir + "/out/manifest.mpd"
 
 	for key, file := range files {
-		if err = util.Upload(bucket, key, file, storage.PublicACL); err != nil {
+		if err = util.Upload(ctx, bucket, key, file, storage.PublicACL); err != nil {
 			return nil, errors.Wrapf(err, "unable to upload %s file", file)
 		}
 	}

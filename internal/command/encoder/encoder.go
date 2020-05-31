@@ -73,6 +73,8 @@ type encoder struct {
 func (e *encoder) Run() {
 	ctx := signal.WatchInterrupt(context.Background(), 25*time.Second)
 
+	logger = logger.WithField("provider", e.provider)
+
 	logger.Info("encoder started")
 
 	go e.metric.Ticker(context.Background(), 1*time.Second)
@@ -157,7 +159,7 @@ loop:
 			taskStarted := time.Now()
 
 			if err = e.HandleEncoder(ctx, req); err != nil {
-				if strings.Contains(err.Error(), "signal: killed") {
+				if strings.Contains(err.Error(), "signal: killed") { // TODO "exit status 255"
 					if err := last.delivery.Nack(true); err != nil {
 						logger.WithError(err).Error("unable to requeue last chunk")
 						break loop
@@ -247,7 +249,9 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 		return nil, errors.Wrap(err, "unable to read chunk file id")
 	}
 
-	if err := util.Download(bucket, chunkFilePath, workDir+"/"+fileName); err != nil {
+	timeoutCtx, _ := context.WithTimeout(ctx, 2*time.Minute)
+
+	if err := util.Download(timeoutCtx, bucket, chunkFilePath, workDir+"/"+fileName); err != nil {
 		return nil, errors.Wrap(err, "unable to get master file")
 	}
 
@@ -260,6 +264,10 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 	ffmpeg.Add("-hide_banner")
 
 	for _, params := range p {
+		if params.Type != "video" {
+			continue
+		}
+
 		ffmpeg.Add("-dn") // no data
 		ffmpeg.Add("-map_metadata", "-1")
 		ffmpeg.Add("-map_chapters", "-1")
@@ -319,11 +327,15 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 
 	for msg := range progress {
 		logger.WithFields(log.Fields{
-			"current":  msg.CurrentDuration,
-			"duration": msg.CompleteDuration,
-			"progress": fmt.Sprintf("%05.2f%%", msg.Progress),
-			"speed":    msg.Speed,
+			"uid":      uid,
+			"id":       id,
+			"current":  msg.CurrentDuration,  // TODO seconds for metrics
+			"duration": msg.CompleteDuration, // TODO seconds for metrics
+			"progress": fmt.Sprintf("%05.2f", msg.Progress),
+			"speed":    strings.TrimRight(msg.Speed, "x"),
 		}).Debug(msg.CurrentTime)
+
+		// TODO metrics
 	}
 
 	err = <-done
@@ -335,7 +347,7 @@ func encode(ctx context.Context, uid string, bucket storage.Bucket, chunkFilePat
 	for quality, encodedFilePath := range list {
 		filePath := fmt.Sprintf("%s/encoded/%d/%03d.mp4", uid, quality, id)
 
-		if err = util.Upload(bucket, filePath, encodedFilePath, storage.PrivateACL); err != nil {
+		if err = util.Upload(ctx, bucket, filePath, encodedFilePath, storage.PrivateACL); err != nil {
 			return nil, errors.Wrap(err, "encoded chunk storage")
 		}
 
