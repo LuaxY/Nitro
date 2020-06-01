@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -181,11 +182,11 @@ func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []in
 	}
 
 	for _, lang := range langs {
-		if err = util.Download(ctx, bucket, uid+"/audio_"+lang+".m4a", workDir+"/audio"+lang+".m4a"); err != nil {
+		if err = util.Download(ctx, bucket, uid+"/audio_"+lang+".m4a", workDir+"/audio_"+lang+".m4a"); err != nil {
 			return nil, errors.Wrap(err, "unable to get audio file")
 		}
 
-		shakaPackager.Add(fmt.Sprintf("in=%[1]s/audio"+lang+".m4a,stream=audio,output=%[1]s/out/audio_"+lang+".m4a,playlist_name=%[1]s/out/audio_"+lang+".m3u8,hls_group_id=audio,hls_name="+lang, workDir))
+		shakaPackager.Add(fmt.Sprintf("in=%[1]s/audio_"+lang+".m4a,stream=audio,output=%[1]s/out/audio_"+lang+".m4a,playlist_name=%[1]s/out/audio_"+lang+".m3u8,lang="+lang+",hls_group_id=audio,hls_name="+formatLang(lang), workDir))
 
 		files[fmt.Sprintf("%s/audio_%s.m4a", uid, lang)] = fmt.Sprintf("%s/out/audio_%s.m4a", workDir, lang)
 		files[fmt.Sprintf("%s/audio_%s.m3u8", uid, lang)] = fmt.Sprintf("%s/out/audio_%s.m3u8", workDir, lang)
@@ -208,4 +209,15 @@ func pack(ctx context.Context, uid string, bucket storage.Bucket, qualities []in
 	}
 
 	return &result{}, nil
+}
+
+func formatLang(lang string) string {
+	switch strings.ToLower(lang) {
+	case "f", "fr", "fra", "fre", "french", "francais":
+		return "Francais"
+	case "e", "en", "eng", "ang", "english", "anglais":
+		return "Anglais"
+	}
+
+	return "Inconnu"
 }
