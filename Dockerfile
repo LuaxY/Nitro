@@ -2,7 +2,7 @@ FROM golang:alpine AS builder
 RUN apk add --no-cache gcc libc-dev
 WORKDIR /nitro
 COPY . .
-RUN GOOS=linux go build -o nitro ./cmd/nitro
+RUN GOOS=linux go build -ldflags="-s -w" -o nitro ./cmd/nitro
 
 FROM google/shaka-packager AS packager
 RUN packager -version
